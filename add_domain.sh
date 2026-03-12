@@ -15,6 +15,26 @@ fi
 # Assign domain name argument
 domain_name=$1
 
+# Load environment variables from .env file if it exists
+ENV_FILE="$(dirname "$0")/.env"
+if [ -f "$ENV_FILE" ]; then
+    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    echo "Loaded MySQL credentials from .env"
+else
+    echo "WARNING: .env file not found. Falling back to passwordless sudo."
+fi
+
+# Set default MySQL root user and pass if not provided in .env
+MYSQL_ROOT_USER=${MYSQL_ROOT_USER:-"root"}
+MYSQL_ROOT_PASS=${MYSQL_ROOT_PASS:-""}
+
+# Construct MySQL command prefix
+if [ -n "$MYSQL_ROOT_PASS" ]; then
+    MYSQL_CMD="mysql -u$MYSQL_ROOT_USER -p$MYSQL_ROOT_PASS"
+else
+    MYSQL_CMD="sudo mysql"
+fi
+
 # Generate username from domain name (alphanumeric, max 16 chars for legacy DB compatibility)
 username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
 sys_pass=$(openssl rand -base64 16)
@@ -57,10 +77,10 @@ echo "=========================================="
 echo "2. Configuring Database: ${db_name}"
 echo "=========================================="
 if command -v mysql &> /dev/null; then
-    sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${db_name}\`;"
-    sudo mysql -e "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';"
-    sudo mysql -e "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';"
-    sudo mysql -e "FLUSH PRIVILEGES;"
+    $MYSQL_CMD -e "CREATE DATABASE IF NOT EXISTS \`${db_name}\`;"
+    $MYSQL_CMD -e "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';"
+    $MYSQL_CMD -e "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';"
+    $MYSQL_CMD -e "FLUSH PRIVILEGES;"
     echo "Database and user created successfully."
 else
     echo "WARNING: MySQL/MariaDB not found. Skipping database setup."

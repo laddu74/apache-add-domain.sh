@@ -15,6 +15,24 @@ fi
 # Assign domain name argument
 domain_name=$1
 
+# Load environment variables from .env file if it exists
+ENV_FILE="$(dirname "$0")/.env"
+if [ -f "$ENV_FILE" ]; then
+    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    echo "Loaded MySQL credentials from .env"
+fi
+
+# Set default MySQL root user and pass if not provided in .env
+MYSQL_ROOT_USER=${MYSQL_ROOT_USER:-"root"}
+MYSQL_ROOT_PASS=${MYSQL_ROOT_PASS:-""}
+
+# Construct MySQL command prefix
+if [ -n "$MYSQL_ROOT_PASS" ]; then
+    MYSQL_CMD="mysql -u$MYSQL_ROOT_USER -p$MYSQL_ROOT_PASS"
+else
+    MYSQL_CMD="sudo mysql"
+fi
+
 # Reconstruct username from domain name
 username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
 
@@ -61,9 +79,9 @@ echo "=========================================="
 echo "2. Deleting Database and DB User"
 echo "=========================================="
 if command -v mysql &> /dev/null; then
-    sudo mysql -e "DROP DATABASE IF EXISTS \`${db_name}\`;"
-    sudo mysql -e "DROP USER IF EXISTS '${db_user}'@'localhost';"
-    sudo mysql -e "FLUSH PRIVILEGES;"
+    $MYSQL_CMD -e "DROP DATABASE IF EXISTS \`${db_name}\`;"
+    $MYSQL_CMD -e "DROP USER IF EXISTS '${db_user}'@'localhost';"
+    $MYSQL_CMD -e "FLUSH PRIVILEGES;"
     echo "Database '${db_name}' and user '${db_user}' have been dropped."
 else
     echo "WARNING: MySQL/MariaDB not found. Skipping database removal."
