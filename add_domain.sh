@@ -17,6 +17,7 @@ domain_name=$1
 
 # Generate username from domain name (alphanumeric, max 16 chars for legacy DB compatibility)
 username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
+sys_pass=$(openssl rand -base64 16)
 
 # Database credentials
 db_name="${username}_db"
@@ -35,9 +36,10 @@ echo "=========================================="
 if id "$username" &>/dev/null; then
     echo "User $username already exists."
 else
-    # Create user with disabled password login (can still SSH with keys if configured)
+    # Create user with a generated password
     sudo useradd -m -d "${user_home}" -s /bin/bash "$username"
-    echo "User ${username} created successfully."
+    echo "${username}:${sys_pass}" | sudo chpasswd
+    echo "User ${username} created successfully with a secure password."
 fi
 
 # Create document root
@@ -131,6 +133,7 @@ echo " SETUP COMPLETE"
 echo "=========================================="
 echo "Domain:        ${domain_name}"
 echo "System User:   ${username}"
+echo "System Pass:   ${sys_pass}"
 echo "Document Root: ${domain_directory}"
 echo ""
 echo "Database Info (Save this!):"
@@ -148,6 +151,7 @@ cat <<EOF | sudo tee -a "$log_file" > /dev/null
 Date:          $(date)
 Domain:        ${domain_name}
 System User:   ${username}
+System Pass:   ${sys_pass}
 Document Root: ${domain_directory}
 DB Name:       ${db_name}
 DB User:       ${db_user}
