@@ -180,3 +180,12 @@ DB Password:   ${db_pass}
 EOF
 
 echo "These details have been securely logged to: $log_file"
+
+# Append to centralized audit log
+audit_log="/var/log/apache_setup_audit.log"
+# Ensure the log file exists and has correct permissions
+if [ ! -f "$audit_log" ]; then
+    sudo touch "$audit_log"
+    sudo chmod 644 "$audit_log"
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] CREATED: Domain=$domain_name, User=$username, DocRoot=$domain_directory" | sudo tee -a "$audit_log" > /dev/null
