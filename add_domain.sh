@@ -35,6 +35,46 @@ else
     MYSQL_CMD="sudo mysql"
 fi
 
+# Function to send setup details via SendGrid
+send_setup_email() {
+    if [ -z "$SENDGRID_API_KEY" ] || [ -z "$ADMIN_EMAIL" ] || [ -z "$SENDER_EMAIL" ]; then
+        echo "WARNING: SendGrid credentials missing. Skipping email notification."
+        return
+    fi
+
+    echo "=========================================="
+    echo " Sending Setup Details via Email"
+    echo "=========================================="
+    
+    # Prepare JSON payload
+    email_json=$(cat <<EOF
+{
+  "personalizations": [{
+    "to": [{"email": "$ADMIN_EMAIL"}]
+  }],
+  "from": {"email": "$SENDER_EMAIL", "name": "Server Setup"},
+  "subject": "New Domain Setup: $domain_name",
+  "content": [{
+    "type": "text/plain",
+    "value": "Domain Setup Details:\n\nDomain: $domain_name\nSystem User: $username\nSystem Pass: $sys_pass\nDocument Root: $domain_directory\n\nDatabase Info:\nDB Name: $db_name\nDB User: $db_user\nDB Password: $db_pass"
+  }]
+}
+EOF
+)
+
+    curl --request POST \
+      --url https://api.sendgrid.com/v3/mail/send \
+      --header "Authorization: Bearer $SENDGRID_API_KEY" \
+      --header 'Content-Type: application/json' \
+      --data "$email_json" > /dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        echo "Email sent successfully to $ADMIN_EMAIL"
+    else
+        echo "ERROR: Failed to send email."
+    fi
+}
+
 # Generate username from domain name (alphanumeric, max 16 chars for legacy DB compatibility)
 username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
 sys_pass=$(openssl rand -base64 16)
@@ -180,3 +220,6 @@ DB Password:   ${db_pass}
 EOF
 
 echo "These details have been securely logged to: $log_file"
+
+# Send email notification
+send_setup_email
