@@ -36,6 +36,34 @@ This script safely reverses the provisioning process, cleaning up the server.
 sudo ./delete_domain.sh example.com
 ```
 
+### 3. `bulk_add.sh`
+This script allows for provisioning multiple domains at once from a file.
+- **Batch Processing:** Reads a simple list of domains from a text file and sequentially calls `add_domain.sh`.
+- **Formatting:** Ignores empty lines and comments (lines starting with `#`).
+
+**Usage:**
+```bash
+sudo ./bulk_add.sh domains.txt
+```
+
+## Security & Notifications
+
+### Environment Variables (`.env`)
+The scripts now support a `.env` file for sensitive configurations. Use `.env.template` as a base.
+- **MySQL Root Credentials:** `MYSQL_ROOT_USER` and `MYSQL_ROOT_PASS` prevent "Access Denied" errors when `sudo mysql` requires a password.
+- **SendGrid Integration:** If `SENDGRID_API_KEY`, `ADMIN_EMAIL`, and `SENDER_EMAIL` are provided, setup details are automatically emailed to the admin.
+
+### Centralized Audit Log
+Every successful domain creation is recorded in a centralized audit log: `/var/log/apache_setup_audit.log`.
+
+## Changelog
+
+### [2026-03-12]
+- **Implemented SendGrid Integration**: Automates email notifications for new setups.
+- **Added Bulk Creation Script**: `bulk_add.sh` for batch domain provisioning.
+- **Introduced Centralized Audit Logging**: Tracking all setup events in one place.
+- **Added `.env` Support**: Secure handling of MySQL root credentials and API keys.
+
 ## IDE / Development Rules
 
 When contributing to or enhancing these scripts, please follow the project branching rules defined in `.cursorrules`:
@@ -47,3 +75,4 @@ When contributing to or enhancing these scripts, please follow the project branc
 - Apache2 (`sudo apt install apache2`)
 - MySQL or MariaDB (`sudo apt install mysql-server`)
 - OpenSSL (pre-installed on most distributions)
+- Curl (for SendGrid notifications)
