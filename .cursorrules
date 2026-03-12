@@ -1,0 +1,8 @@
+# Project Branching Rule
+
+When working on this project (adding features, enhancing scripts, fixing bugs, etc.):
+
+1. **New Branches:** ALWAYS create a new branch off `main` for any new feature or change. 
+   - Feature branches should follow a standard naming convention like `feature/<feature-name>`.
+2. **Merging:** Once the feature is thoroughly tested and complete, merge the feature branch back into the `main` branch. 
+3. **No Direct Main Commits:** Never commit new features directly to the `main` branch.
