@@ -143,7 +143,7 @@ echo "DB Password:   ${db_pass}"
 echo "=========================================="
 
 # Log credentials to a secure file
-log_file="/var/log/apache_domain_setup.log"
+log_file="/var/log/apache_${domain_name}_setup.log"
 sudo touch "$log_file"
 sudo chmod 600 "$log_file" # Ensure only root can read it
 cat <<EOF | sudo tee -a "$log_file" > /dev/null
