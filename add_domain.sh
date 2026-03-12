@@ -138,3 +138,21 @@ echo "DB Name:       ${db_name}"
 echo "DB User:       ${db_user}"
 echo "DB Password:   ${db_pass}"
 echo "=========================================="
+
+# Log credentials to a secure file
+log_file="/var/log/apache_domain_setup.log"
+sudo touch "$log_file"
+sudo chmod 600 "$log_file" # Ensure only root can read it
+cat <<EOF | sudo tee -a "$log_file" > /dev/null
+==========================================
+Date:          $(date)
+Domain:        ${domain_name}
+System User:   ${username}
+Document Root: ${domain_directory}
+DB Name:       ${db_name}
+DB User:       ${db_user}
+DB Password:   ${db_pass}
+==========================================
+EOF
+
+echo "These details have been securely logged to: $log_file"
