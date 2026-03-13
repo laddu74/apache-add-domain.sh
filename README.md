@@ -46,12 +46,25 @@ This script allows for provisioning multiple domains at once from a file.
 sudo ./bulk_add.sh domains.txt
 ```
 
+### 4. `add_database.sh`
+This script allows for adding an additional MySQL database to an existing system user.
+- **Validation:** Checks if the system user and the primary database user (`username_usr`) exist.
+- **Naming Pattern:** Databases are named following the pattern `username_suffix_db`.
+- **Integration:** Fully respects `USE_MYSQL_AUTH` and `ENABLE_SENDGRID` flags.
+
+**Usage:**
+```bash
+sudo ./add_database.sh username suffix
+```
+
 ## Security & Notifications
 
 ### Environment Variables (`.env`)
 The scripts now support a `.env` file for sensitive configurations. Use `.env.template` as a base.
 - **MySQL Root Credentials:** `MYSQL_ROOT_USER` and `MYSQL_ROOT_PASS` prevent "Access Denied" errors when `sudo mysql` requires a password.
-- **SendGrid Integration:** If `SENDGRID_API_KEY`, `ADMIN_EMAIL`, and `SENDER_EMAIL` are provided, setup details are automatically emailed to the admin.
+- **USE_MYSQL_AUTH flag:** Set to `true` to use credentials, or `false` to use direct `sudo mysql`.
+- **SendGrid Integration:** Provide `SENDGRID_API_KEY`, `ADMIN_EMAIL`, and `SENDER_EMAIL` for setup details notifications.
+- **ENABLE_SENDGRID flag:** Toggle email notifications on or off (`true`/`false`).
 
 ### Centralized Audit Log
 Every successful domain creation is recorded in a centralized audit log: `/var/log/apache_setup_audit.log`.
@@ -59,10 +72,16 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 ## Changelog
 
 ### [2026-03-12]
+- **Integrated Feature Flags**: Added `ENABLE_SENDGRID` and `USE_MYSQL_AUTH` for more granular control.
 - **Implemented SendGrid Integration**: Automates email notifications for new setups.
 - **Added Bulk Creation Script**: `bulk_add.sh` for batch domain provisioning.
 - **Introduced Centralized Audit Logging**: Tracking all setup events in one place.
 - **Added `.env` Support**: Secure handling of MySQL root credentials and API keys.
+
+### [2026-03-13]
+- **Added `add_database.sh` utility**: Facilitates adding extra databases to existing users.
+- **Hardened MySQL Authentication**: Support for explicit credential-based or sudo authentication.
+- **Enhanced Feature Toggling**: Consistent use of flags across all scripts.
 
 ## IDE / Development Rules
 
