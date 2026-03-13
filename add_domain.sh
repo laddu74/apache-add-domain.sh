@@ -37,6 +37,11 @@ fi
 
 # Function to send setup details via SendGrid
 send_setup_email() {
+    if [ "${ENABLE_SENDGRID,,}" != "true" ]; then
+        echo "INFO: SendGrid integration disabled. Skipping email notification."
+        return
+    fi
+
     if [ -z "$SENDGRID_API_KEY" ] || [ -z "$ADMIN_EMAIL" ] || [ -z "$SENDER_EMAIL" ]; then
         echo "WARNING: SendGrid credentials missing. Skipping email notification."
         return
