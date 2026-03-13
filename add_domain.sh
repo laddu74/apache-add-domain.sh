@@ -29,8 +29,12 @@ MYSQL_ROOT_USER=${MYSQL_ROOT_USER:-"root"}
 MYSQL_ROOT_PASS=${MYSQL_ROOT_PASS:-""}
 
 # Construct MySQL command prefix
-if [ -n "$MYSQL_ROOT_PASS" ]; then
-    MYSQL_CMD="mysql -u$MYSQL_ROOT_USER -p$MYSQL_ROOT_PASS"
+if [ "${USE_MYSQL_AUTH,,}" = "true" ]; then
+    if [ -n "$MYSQL_ROOT_PASS" ]; then
+        MYSQL_CMD="mysql -u$MYSQL_ROOT_USER -p$MYSQL_ROOT_PASS"
+    else
+        MYSQL_CMD="mysql -u$MYSQL_ROOT_USER"
+    fi
 else
     MYSQL_CMD="sudo mysql"
 fi
