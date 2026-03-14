@@ -6,14 +6,24 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# Default values
+site_type="php"
+domain_name=""
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --type=*) site_type="${1#*=}"; shift ;;
+        -t|--type) site_type="$2"; shift 2 ;;
+        *) domain_name="$1"; shift ;;
+    esac
+done
+
 # Check if domain name argument is provided
-if [ $# -ne 1 ]; then
-    echo "Usage: sudo $0 domain_name"
+if [ -z "$domain_name" ]; then
+    echo "Usage: sudo $0 <domain_name> [--type=php|perl|python|ror]"
     exit 1
 fi
-
-# Assign domain name argument
-domain_name=$1
 
 # Load environment variables from .env file if it exists
 ENV_FILE="$(dirname "$0")/.env"
@@ -38,6 +48,50 @@ if [ "${USE_MYSQL_AUTH,,}" = "true" ]; then
 else
     MYSQL_CMD="sudo mysql"
 fi
+# Function to check required Apache modules
+check_required_modules() {
+    local modules=()
+    case ${site_type,,} in
+        perl) modules=("cgid" "rewrite" "headers") ;;
+        python) modules=("wsgi" "rewrite" "headers") ;;
+        ror) modules=("passenger" "rewrite" "headers") ;;
+        php|*) modules=("rewrite" "headers") ;;
+    esac
+
+    local missing_modules=()
+    for mod in "${modules[@]}"; do
+        if ! apache2ctl -M 2>/dev/null | grep -q "${mod}_module"; then
+            # Check if it's available to enable
+            if [ -f "/etc/apache2/mods-available/${mod}.load" ]; then
+                echo "Enabling required module: ${mod}"
+                sudo a2enmod "$mod" > /dev/null 2>&1
+            else
+                missing_modules+=("$mod")
+            fi
+        fi
+    done
+
+    if [ ${#missing_modules[@]} -ne 0 ]; then
+        echo "=========================================="
+        echo " ERROR: Missing Required Apache Modules"
+        echo "=========================================="
+        echo "The following modules are NOT installed on your system:"
+        for mod in "${missing_modules[@]}"; do
+            echo " - $mod"
+        done
+        echo ""
+        echo "Please install them using: sudo apt update && sudo apt install <module-package>"
+        echo "For example:"
+        echo " - WSGI (Python): libapache2-mod-wsgi-py3"
+        echo " - Passenger (RoR): libapache2-mod-passenger"
+        echo " - Perl: libapache2-mod-perl2 (or just use cgid which is usually built-in)"
+        echo "=========================================="
+        exit 1
+    fi
+}
+
+# Run module check
+check_required_modules
 
 # Function to send setup details via SendGrid
 send_setup_email() {
@@ -99,6 +153,8 @@ domain_directory="${user_home}/public_html"
 apache_conf_dir="/etc/apache2/sites-available/"
 apache_conf="${apache_conf_dir}${domain_name}.conf"
 
+echo "Site Type: ${site_type^^}"
+
 echo "=========================================="
 echo "1. Creating System User: ${username}"
 echo "=========================================="
@@ -146,26 +202,34 @@ if [ -f "$apache_conf" ]; then
 fi
 
 # Create Apache virtual host configuration file
-cat <<EOF | sudo tee "$apache_conf" > /dev/null
+case ${site_type,,} in
+    perl)
+        VHOST_CONFIG=$(cat <<EOF
 <VirtualHost *:80>
     ServerName ${domain_name}
     ServerAlias www.${domain_name}
     DocumentRoot ${domain_directory}
 
     <Directory ${domain_directory}>
-        # Hardening: Disallow directory listing, allow symlinks
-        Options -Indexes +FollowSymLinks
-        # Allow .htaccess to override configurations (Required for WordPress/PHP CMS)
+        Options +ExecCGI -Indexes +FollowSymLinks
+        AddHandler cgi-script .cgi .pl
         AllowOverride All
         Require all granted
     </Directory>
 
-    # Hardening: Block access to hidden files and directories (like .git, .env)
+    # ScriptAlias for CGI
+    ScriptAlias /cgi-bin/ "${domain_directory}/cgi-bin/"
+
+    <Directory "${domain_directory}/cgi-bin">
+        AllowOverride None
+        Options +ExecCGI
+        Require all granted
+    </Directory>
+
     <DirectoryMatch "/\.(?!well-known)">
         Require all denied
     </DirectoryMatch>
 
-    # Hardening: Security Headers
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "SAMEORIGIN"
     Header always set X-XSS-Protection "1; mode=block"
@@ -175,14 +239,112 @@ cat <<EOF | sudo tee "$apache_conf" > /dev/null
     CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
 </VirtualHost>
 EOF
+)
+        ;;
+    python)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}
+
+    # WSGI Configuration
+    WSGIDaemonProcess ${username} user=${username} group=www-data threads=5
+    WSGIProcessGroup ${username}
+    WSGIScriptAlias / ${domain_directory}/adapter.wsgi
+
+    <Directory ${domain_directory}>
+        WSGIProcessGroup ${username}
+        WSGIApplicationGroup %{GLOBAL}
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+    ror)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}/public
+
+    # Passenger Configuration
+    PassengerEnabled on
+    PassengerAppType rack
+    PassengerAppRoot ${domain_directory}
+
+    <Directory ${domain_directory}/public>
+        AllowOverride all
+        Options -MultiViews
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+    php|*)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}
+
+    <Directory ${domain_directory}>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+esac
+
+echo "$VHOST_CONFIG" | sudo tee "$apache_conf" > /dev/null
 
 echo "VirtualHost configuration created."
 
 echo "=========================================="
 echo "4. Enabling Site and Applying Changes"
 echo "=========================================="
-# Enable the required modules for WordPress and security headers
-sudo a2enmod rewrite headers > /dev/null 2>&1
+# Modules are now handled by check_required_modules
 
 # Enable the site
 sudo a2ensite ${domain_name} > /dev/null 2>&1
@@ -201,6 +363,7 @@ echo "=========================================="
 echo " SETUP COMPLETE"
 echo "=========================================="
 echo "Domain:        ${domain_name}"
+echo "Site Type:     ${site_type^^}"
 echo "System User:   ${username}"
 echo "System Pass:   ${sys_pass}"
 echo "Document Root: ${domain_directory}"
@@ -237,7 +400,7 @@ if [ ! -f "$audit_log" ]; then
     sudo touch "$audit_log"
     sudo chmod 644 "$audit_log"
 fi
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] CREATED: Domain=$domain_name, User=$username, DocRoot=$domain_directory" | sudo tee -a "$audit_log" > /dev/null
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] CREATED: Domain=$domain_name, Type=$site_type, User=$username, DocRoot=$domain_directory" | sudo tee -a "$audit_log" > /dev/null
 
 # Send email notification
 send_setup_email

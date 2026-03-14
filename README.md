@@ -2,7 +2,7 @@
 
 A set of automated bash utility scripts to quickly set up, secure, and remove Apache virtual hosts, along with dedicated system users and MySQL databases on Ubuntu/Debian servers. 
 
-These scripts are specifically optimized for PHP-based applications (like WordPress) and enforce security best practices out of the box.
+These scripts are optimized for PHP, Perl, Python, and Ruby on Rails applications, enforcing security best practices out of the box.
 
 ## Features
 
@@ -10,17 +10,19 @@ These scripts are specifically optimized for PHP-based applications (like WordPr
 This script fully automates the provisioning of a new domain.
 - **System Isolation:** Automatically creates a dedicated system user and a `public_html` directory with restricted permissions (`750` owner/www-data).
 - **Secure Credentials:** Generates a highly secure 16-character random password for the system user (`openssl` generated).
+- **Multi-Platform Support:** Supports PHP (default), Perl, Python (WSGI), and Ruby on Rails (Passenger).
+- **Module Verification:** Automatically checks for required Apache modules (e.g., `mod_wsgi`, `mod_passenger`, `mod_cgid`) and alerts the user if any are missing.
 - **Database Provisioning:** Creates a dedicated MySQL database and a specific database user, generating another secure random password, and strictly binding privileges.
 - **Apache VirtualHost:** 
-  - Generates an Apache `.conf` file.
-  - Enables `AllowOverride All` (required for WordPress/PHP CMS Permalinks).
+  - Generates an Apache `.conf` file tailored to the application type.
+  - Enables `AllowOverride All` where appropriate.
   - Hardens security by blocking directory listings (`-Indexes`) and hidden files/directories (like `.git` or `.env`).
   - Implements modern Security Headers (`nosniff`, `SAMEORIGIN`, `XSS-Protection`, `Referrer-Policy`).
 - **Secure Logging:** Securely logs the generated credentials (DB User, DB Pass, System Pass, etc.) to a root-only accessible log file: `/var/log/apache_<domain_name>_setup.log`.
 
 **Usage:**
 ```bash
-sudo ./add_domain.sh example.com
+sudo ./add_domain.sh example.com [--type=php|perl|python|ror]
 ```
 
 ### 2. `delete_domain.sh`
@@ -82,6 +84,10 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Added `add_database.sh` utility**: Facilitates adding extra databases to existing users.
 - **Hardened MySQL Authentication**: Support for explicit credential-based or sudo authentication.
 - **Enhanced Feature Toggling**: Consistent use of flags across all scripts.
+### [2026-03-15]
+- **Multi-Type Site Support:** Added support for Perl, Python (WSGI), and Ruby on Rails (Passenger) sites.
+- **Improved Module Management:** Integrated automated Apache module checking and user alerting for system dependencies.
+- **Dynamic VirtualHost Generation:** Configures Apache based on the `--type` flag.
 
 ## IDE / Development Rules
 
