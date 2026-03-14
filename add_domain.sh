@@ -93,6 +93,189 @@ check_required_modules() {
 # Run module check
 check_required_modules
 
+# Function to check runtime tools and scaffold the environment for the site type
+# (called AFTER user + directory creation so chown/mkdir works correctly)
+setup_runtime_environment() {
+    echo "=========================================="
+    echo "  Runtime Environment Setup (${site_type^^})"
+    echo "=========================================="
+
+    case ${site_type,,} in
+        perl)
+            # Check Perl interpreter
+            if ! command -v perl &> /dev/null; then
+                echo "WARNING: Perl is not installed."
+                echo "  Install with: sudo apt install perl"
+            else
+                PERL_VER=$(perl -e 'print $^V')
+                echo "OK Perl found: ${PERL_VER}"
+            fi
+
+            # Create cgi-bin directory with +x permissions for CGI execution
+            sudo mkdir -p "${domain_directory}/cgi-bin"
+            sudo chown ${username}:www-data "${domain_directory}/cgi-bin"
+            sudo chmod 755 "${domain_directory}/cgi-bin"
+            echo "OK cgi-bin/ created at ${domain_directory}/cgi-bin"
+
+            # Create a sample hello.pl CGI script
+            if [ ! -f "${domain_directory}/cgi-bin/hello.pl" ]; then
+                cat > /tmp/_hello_pl.$$ <<'ENDSCRIPT'
+#!/usr/bin/perl
+use strict;
+use warnings;
+print "Content-type: text/html\n\n";
+print "<html><body><h1>Hello from Perl CGI!</h1></body></html>\n";
+ENDSCRIPT
+                sudo mv /tmp/_hello_pl.$$ "${domain_directory}/cgi-bin/hello.pl"
+                sudo chmod 755 "${domain_directory}/cgi-bin/hello.pl"
+                sudo chown ${username}:www-data "${domain_directory}/cgi-bin/hello.pl"
+                echo "OK Sample CGI script: cgi-bin/hello.pl"
+            fi
+            ;;
+
+        python)
+            # Check Python 3 interpreter
+            if ! command -v python3 &> /dev/null; then
+                echo "WARNING: Python 3 is not installed."
+                echo "  Install with: sudo apt install python3 python3-pip python3-venv"
+            else
+                PYTHON_VER=$(python3 --version)
+                echo "OK ${PYTHON_VER} found"
+            fi
+
+            # Check pip3
+            if ! command -v pip3 &> /dev/null; then
+                echo "WARNING: pip3 is not installed."
+                echo "  Install with: sudo apt install python3-pip"
+            else
+                echo "OK pip3 found"
+            fi
+
+            # Create a Python virtualenv for the site
+            if command -v python3 &> /dev/null; then
+                if [ ! -d "${domain_directory}/venv" ]; then
+                    sudo -u "${username}" python3 -m venv "${domain_directory}/venv"
+                    echo "OK virtualenv created at ${domain_directory}/venv"
+                fi
+            fi
+
+            # Create a starter adapter.wsgi (VirtualHost points to this file)
+            if [ ! -f "${domain_directory}/adapter.wsgi" ]; then
+                cat > /tmp/_adapter_wsgi.$$ <<ENDSCRIPT
+import sys
+import os
+
+# Add the application directory to sys.path
+sys.path.insert(0, '${domain_directory}')
+
+# Activate virtual environment if present
+activate_this = os.path.join('${domain_directory}', 'venv', 'bin', 'activate_this.py')
+if os.path.exists(activate_this):
+    exec(open(activate_this).read(), dict(__file__=activate_this))
+
+def application(environ, start_response):
+    status = '200 OK'
+    output = b'<html><body><h1>Hello from Python WSGI!</h1></body></html>'
+    response_headers = [('Content-type', 'text/html'), ('Content-Length', str(len(output)))]
+    start_response(status, response_headers)
+    return [output]
+ENDSCRIPT
+                sudo mv /tmp/_adapter_wsgi.$$ "${domain_directory}/adapter.wsgi"
+                sudo chown ${username}:www-data "${domain_directory}/adapter.wsgi"
+                sudo chmod 644 "${domain_directory}/adapter.wsgi"
+                echo "OK Starter adapter.wsgi created"
+            fi
+            ;;
+
+        ror)
+            # Check Ruby
+            if ! command -v ruby &> /dev/null; then
+                echo "WARNING: Ruby is not installed."
+                echo "  Install with: sudo apt install ruby ruby-dev"
+            else
+                RUBY_VER=$(ruby --version)
+                echo "OK ${RUBY_VER} found"
+            fi
+
+            # Check Bundler
+            if ! command -v bundle &> /dev/null; then
+                echo "WARNING: Bundler gem is not installed."
+                echo "  Install with: sudo gem install bundler"
+            else
+                echo "OK $(bundle --version) found"
+            fi
+
+            # Check Passenger gem
+            if ! gem list passenger --installed > /dev/null 2>&1; then
+                echo "WARNING: Passenger gem is not installed."
+                echo "  Install with: sudo gem install passenger"
+            else
+                echo "OK Passenger gem found"
+            fi
+
+            # Create public/ directory (RoR DocumentRoot)
+            sudo mkdir -p "${domain_directory}/public"
+            sudo chown ${username}:www-data "${domain_directory}/public"
+            sudo chmod 755 "${domain_directory}/public"
+            echo "OK public/ directory created"
+
+            # Create a minimal config.ru (Rack entry point for Passenger)
+            if [ ! -f "${domain_directory}/config.ru" ]; then
+                cat > /tmp/_config_ru.$$ <<'ENDSCRIPT'
+# Replace with your actual Rails app loader:
+# require_relative 'config/environment'
+# run Rails.application
+run proc { |env|
+  [200, { 'Content-Type' => 'text/html' }, ['<html><body><h1>Hello from Rails!</h1></body></html>']]
+}
+ENDSCRIPT
+                sudo mv /tmp/_config_ru.$$ "${domain_directory}/config.ru"
+                sudo chown ${username}:www-data "${domain_directory}/config.ru"
+                sudo chmod 644 "${domain_directory}/config.ru"
+                echo "OK Starter config.ru created (replace with your Rails app)"
+            fi
+
+            # Placeholder index.html in public/
+            if [ ! -f "${domain_directory}/public/index.html" ]; then
+                cat > /tmp/_index_html.$$ <<'ENDSCRIPT'
+<!DOCTYPE html>
+<html><body><h1>Ruby on Rails - Site Ready</h1>
+<p>Deploy your Rails app to this directory.</p></body></html>
+ENDSCRIPT
+                sudo mv /tmp/_index_html.$$ "${domain_directory}/public/index.html"
+                sudo chown ${username}:www-data "${domain_directory}/public/index.html"
+                echo "OK Placeholder public/index.html created"
+            fi
+            ;;
+
+        php|*)
+            # Check PHP interpreter
+            if ! command -v php &> /dev/null; then
+                echo "WARNING: PHP is not installed."
+                echo "  Install with: sudo apt install php libapache2-mod-php php-mysql"
+            else
+                PHP_VER=$(php --version | head -n 1)
+                echo "OK ${PHP_VER} found"
+            fi
+
+            # Starter index.php
+            if [ ! -f "${domain_directory}/index.php" ]; then
+                cat > /tmp/_index_php.$$ <<'ENDSCRIPT'
+<?php
+echo "<html><body><h1>Hello from PHP!</h1></body></html>";
+ENDSCRIPT
+                sudo mv /tmp/_index_php.$$ "${domain_directory}/index.php"
+                sudo chown ${username}:www-data "${domain_directory}/index.php"
+                sudo chmod 644 "${domain_directory}/index.php"
+                echo "OK Starter index.php created"
+            fi
+            ;;
+    esac
+
+    echo "Runtime environment setup complete."
+    echo "=========================================="
+}
+
 # Function to send setup details via SendGrid
 send_setup_email() {
     if [ "${ENABLE_SENDGRID,,}" != "true" ]; then
@@ -177,6 +360,9 @@ sudo chown -R ${username}:www-data "${user_home}"
 sudo chmod 750 "${user_home}"
 sudo chmod 750 "${domain_directory}"
 echo "Permissions secured for ${domain_directory}"
+
+# Scaffold the runtime environment for the chosen site type
+setup_runtime_environment
 
 echo "=========================================="
 echo "2. Configuring Database: ${db_name}"
