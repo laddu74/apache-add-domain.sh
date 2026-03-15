@@ -6,14 +6,24 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# Default values
+site_type="php"
+domain_name=""
+
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --type=*) site_type="${1#*=}"; shift ;;
+        -t|--type) site_type="$2"; shift 2 ;;
+        *) domain_name="$1"; shift ;;
+    esac
+done
+
 # Check if domain name argument is provided
-if [ $# -ne 1 ]; then
-    echo "Usage: sudo $0 domain_name"
+if [ -z "$domain_name" ]; then
+    echo "Usage: sudo $0 <domain_name> [--type=php|perl|python|ror]"
     exit 1
 fi
-
-# Assign domain name argument
-domain_name=$1
 
 # Load environment variables from .env file if it exists
 ENV_FILE="$(dirname "$0")/.env"
@@ -38,6 +48,233 @@ if [ "${USE_MYSQL_AUTH,,}" = "true" ]; then
 else
     MYSQL_CMD="sudo mysql"
 fi
+# Function to check required Apache modules
+check_required_modules() {
+    local modules=()
+    case ${site_type,,} in
+        perl) modules=("cgid" "rewrite" "headers") ;;
+        python) modules=("wsgi" "rewrite" "headers") ;;
+        ror) modules=("passenger" "rewrite" "headers") ;;
+        php|*) modules=("rewrite" "headers") ;;
+    esac
+
+    local missing_modules=()
+    for mod in "${modules[@]}"; do
+        if ! apache2ctl -M 2>/dev/null | grep -q "${mod}_module"; then
+            # Check if it's available to enable
+            if [ -f "/etc/apache2/mods-available/${mod}.load" ]; then
+                echo "Enabling required module: ${mod}"
+                sudo a2enmod "$mod" > /dev/null 2>&1
+            else
+                missing_modules+=("$mod")
+            fi
+        fi
+    done
+
+    if [ ${#missing_modules[@]} -ne 0 ]; then
+        echo "=========================================="
+        echo " ERROR: Missing Required Apache Modules"
+        echo "=========================================="
+        echo "The following modules are NOT installed on your system:"
+        for mod in "${missing_modules[@]}"; do
+            echo " - $mod"
+        done
+        echo ""
+        echo "Please install them using: sudo apt update && sudo apt install <module-package>"
+        echo "For example:"
+        echo " - WSGI (Python): libapache2-mod-wsgi-py3"
+        echo " - Passenger (RoR): libapache2-mod-passenger"
+        echo " - Perl: libapache2-mod-perl2 (or just use cgid which is usually built-in)"
+        echo "=========================================="
+        exit 1
+    fi
+}
+
+# Run module check
+check_required_modules
+
+# Function to check runtime tools and scaffold the environment for the site type
+# (called AFTER user + directory creation so chown/mkdir works correctly)
+setup_runtime_environment() {
+    echo "=========================================="
+    echo "  Runtime Environment Setup (${site_type^^})"
+    echo "=========================================="
+
+    case ${site_type,,} in
+        perl)
+            # Check Perl interpreter
+            if ! command -v perl &> /dev/null; then
+                echo "WARNING: Perl is not installed."
+                echo "  Install with: sudo apt install perl"
+            else
+                PERL_VER=$(perl -e 'print $^V')
+                echo "OK Perl found: ${PERL_VER}"
+            fi
+
+            # Create cgi-bin directory with +x permissions for CGI execution
+            sudo mkdir -p "${domain_directory}/cgi-bin"
+            sudo chown ${username}:www-data "${domain_directory}/cgi-bin"
+            sudo chmod 755 "${domain_directory}/cgi-bin"
+            echo "OK cgi-bin/ created at ${domain_directory}/cgi-bin"
+
+            # Create a sample hello.pl CGI script
+            if [ ! -f "${domain_directory}/cgi-bin/hello.pl" ]; then
+                cat > /tmp/_hello_pl.$$ <<'ENDSCRIPT'
+#!/usr/bin/perl
+use strict;
+use warnings;
+print "Content-type: text/html\n\n";
+print "<html><body><h1>Hello from Perl CGI!</h1></body></html>\n";
+ENDSCRIPT
+                sudo mv /tmp/_hello_pl.$$ "${domain_directory}/cgi-bin/hello.pl"
+                sudo chmod 755 "${domain_directory}/cgi-bin/hello.pl"
+                sudo chown ${username}:www-data "${domain_directory}/cgi-bin/hello.pl"
+                echo "OK Sample CGI script: cgi-bin/hello.pl"
+            fi
+            ;;
+
+        python)
+            # Check Python 3 interpreter
+            if ! command -v python3 &> /dev/null; then
+                echo "WARNING: Python 3 is not installed."
+                echo "  Install with: sudo apt install python3 python3-pip python3-venv"
+            else
+                PYTHON_VER=$(python3 --version)
+                echo "OK ${PYTHON_VER} found"
+            fi
+
+            # Check pip3
+            if ! command -v pip3 &> /dev/null; then
+                echo "WARNING: pip3 is not installed."
+                echo "  Install with: sudo apt install python3-pip"
+            else
+                echo "OK pip3 found"
+            fi
+
+            # Create a Python virtualenv for the site
+            if command -v python3 &> /dev/null; then
+                if [ ! -d "${domain_directory}/venv" ]; then
+                    sudo -u "${username}" python3 -m venv "${domain_directory}/venv"
+                    echo "OK virtualenv created at ${domain_directory}/venv"
+                fi
+            fi
+
+            # Create a starter adapter.wsgi (VirtualHost points to this file)
+            if [ ! -f "${domain_directory}/adapter.wsgi" ]; then
+                cat > /tmp/_adapter_wsgi.$$ <<ENDSCRIPT
+import sys
+import os
+
+# Add the application directory to sys.path
+sys.path.insert(0, '${domain_directory}')
+
+# Activate virtual environment if present
+activate_this = os.path.join('${domain_directory}', 'venv', 'bin', 'activate_this.py')
+if os.path.exists(activate_this):
+    exec(open(activate_this).read(), dict(__file__=activate_this))
+
+def application(environ, start_response):
+    status = '200 OK'
+    output = b'<html><body><h1>Hello from Python WSGI!</h1></body></html>'
+    response_headers = [('Content-type', 'text/html'), ('Content-Length', str(len(output)))]
+    start_response(status, response_headers)
+    return [output]
+ENDSCRIPT
+                sudo mv /tmp/_adapter_wsgi.$$ "${domain_directory}/adapter.wsgi"
+                sudo chown ${username}:www-data "${domain_directory}/adapter.wsgi"
+                sudo chmod 644 "${domain_directory}/adapter.wsgi"
+                echo "OK Starter adapter.wsgi created"
+            fi
+            ;;
+
+        ror)
+            # Check Ruby
+            if ! command -v ruby &> /dev/null; then
+                echo "WARNING: Ruby is not installed."
+                echo "  Install with: sudo apt install ruby ruby-dev"
+            else
+                RUBY_VER=$(ruby --version)
+                echo "OK ${RUBY_VER} found"
+            fi
+
+            # Check Bundler
+            if ! command -v bundle &> /dev/null; then
+                echo "WARNING: Bundler gem is not installed."
+                echo "  Install with: sudo gem install bundler"
+            else
+                echo "OK $(bundle --version) found"
+            fi
+
+            # Check Passenger gem
+            if ! gem list passenger --installed > /dev/null 2>&1; then
+                echo "WARNING: Passenger gem is not installed."
+                echo "  Install with: sudo gem install passenger"
+            else
+                echo "OK Passenger gem found"
+            fi
+
+            # Create public/ directory (RoR DocumentRoot)
+            sudo mkdir -p "${domain_directory}/public"
+            sudo chown ${username}:www-data "${domain_directory}/public"
+            sudo chmod 755 "${domain_directory}/public"
+            echo "OK public/ directory created"
+
+            # Create a minimal config.ru (Rack entry point for Passenger)
+            if [ ! -f "${domain_directory}/config.ru" ]; then
+                cat > /tmp/_config_ru.$$ <<'ENDSCRIPT'
+# Replace with your actual Rails app loader:
+# require_relative 'config/environment'
+# run Rails.application
+run proc { |env|
+  [200, { 'Content-Type' => 'text/html' }, ['<html><body><h1>Hello from Rails!</h1></body></html>']]
+}
+ENDSCRIPT
+                sudo mv /tmp/_config_ru.$$ "${domain_directory}/config.ru"
+                sudo chown ${username}:www-data "${domain_directory}/config.ru"
+                sudo chmod 644 "${domain_directory}/config.ru"
+                echo "OK Starter config.ru created (replace with your Rails app)"
+            fi
+
+            # Placeholder index.html in public/
+            if [ ! -f "${domain_directory}/public/index.html" ]; then
+                cat > /tmp/_index_html.$$ <<'ENDSCRIPT'
+<!DOCTYPE html>
+<html><body><h1>Ruby on Rails - Site Ready</h1>
+<p>Deploy your Rails app to this directory.</p></body></html>
+ENDSCRIPT
+                sudo mv /tmp/_index_html.$$ "${domain_directory}/public/index.html"
+                sudo chown ${username}:www-data "${domain_directory}/public/index.html"
+                echo "OK Placeholder public/index.html created"
+            fi
+            ;;
+
+        php|*)
+            # Check PHP interpreter
+            if ! command -v php &> /dev/null; then
+                echo "WARNING: PHP is not installed."
+                echo "  Install with: sudo apt install php libapache2-mod-php php-mysql"
+            else
+                PHP_VER=$(php --version | head -n 1)
+                echo "OK ${PHP_VER} found"
+            fi
+
+            # Starter index.php
+            if [ ! -f "${domain_directory}/index.php" ]; then
+                cat > /tmp/_index_php.$$ <<'ENDSCRIPT'
+<?php
+echo "<html><body><h1>Hello from PHP!</h1></body></html>";
+ENDSCRIPT
+                sudo mv /tmp/_index_php.$$ "${domain_directory}/index.php"
+                sudo chown ${username}:www-data "${domain_directory}/index.php"
+                sudo chmod 644 "${domain_directory}/index.php"
+                echo "OK Starter index.php created"
+            fi
+            ;;
+    esac
+
+    echo "Runtime environment setup complete."
+    echo "=========================================="
+}
 
 # Function to send setup details via SendGrid
 send_setup_email() {
@@ -99,6 +336,8 @@ domain_directory="${user_home}/public_html"
 apache_conf_dir="/etc/apache2/sites-available/"
 apache_conf="${apache_conf_dir}${domain_name}.conf"
 
+echo "Site Type: ${site_type^^}"
+
 echo "=========================================="
 echo "1. Creating System User: ${username}"
 echo "=========================================="
@@ -121,6 +360,9 @@ sudo chown -R ${username}:www-data "${user_home}"
 sudo chmod 750 "${user_home}"
 sudo chmod 750 "${domain_directory}"
 echo "Permissions secured for ${domain_directory}"
+
+# Scaffold the runtime environment for the chosen site type
+setup_runtime_environment
 
 echo "=========================================="
 echo "2. Configuring Database: ${db_name}"
@@ -146,26 +388,34 @@ if [ -f "$apache_conf" ]; then
 fi
 
 # Create Apache virtual host configuration file
-cat <<EOF | sudo tee "$apache_conf" > /dev/null
+case ${site_type,,} in
+    perl)
+        VHOST_CONFIG=$(cat <<EOF
 <VirtualHost *:80>
     ServerName ${domain_name}
     ServerAlias www.${domain_name}
     DocumentRoot ${domain_directory}
 
     <Directory ${domain_directory}>
-        # Hardening: Disallow directory listing, allow symlinks
-        Options -Indexes +FollowSymLinks
-        # Allow .htaccess to override configurations (Required for WordPress/PHP CMS)
+        Options +ExecCGI -Indexes +FollowSymLinks
+        AddHandler cgi-script .cgi .pl
         AllowOverride All
         Require all granted
     </Directory>
 
-    # Hardening: Block access to hidden files and directories (like .git, .env)
+    # ScriptAlias for CGI
+    ScriptAlias /cgi-bin/ "${domain_directory}/cgi-bin/"
+
+    <Directory "${domain_directory}/cgi-bin">
+        AllowOverride None
+        Options +ExecCGI
+        Require all granted
+    </Directory>
+
     <DirectoryMatch "/\.(?!well-known)">
         Require all denied
     </DirectoryMatch>
 
-    # Hardening: Security Headers
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "SAMEORIGIN"
     Header always set X-XSS-Protection "1; mode=block"
@@ -175,14 +425,112 @@ cat <<EOF | sudo tee "$apache_conf" > /dev/null
     CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
 </VirtualHost>
 EOF
+)
+        ;;
+    python)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}
+
+    # WSGI Configuration
+    WSGIDaemonProcess ${username} user=${username} group=www-data threads=5
+    WSGIProcessGroup ${username}
+    WSGIScriptAlias / ${domain_directory}/adapter.wsgi
+
+    <Directory ${domain_directory}>
+        WSGIProcessGroup ${username}
+        WSGIApplicationGroup %{GLOBAL}
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+    ror)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}/public
+
+    # Passenger Configuration
+    PassengerEnabled on
+    PassengerAppType rack
+    PassengerAppRoot ${domain_directory}
+
+    <Directory ${domain_directory}/public>
+        AllowOverride all
+        Options -MultiViews
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+    php|*)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}
+
+    <Directory ${domain_directory}>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+esac
+
+echo "$VHOST_CONFIG" | sudo tee "$apache_conf" > /dev/null
 
 echo "VirtualHost configuration created."
 
 echo "=========================================="
 echo "4. Enabling Site and Applying Changes"
 echo "=========================================="
-# Enable the required modules for WordPress and security headers
-sudo a2enmod rewrite headers > /dev/null 2>&1
+# Modules are now handled by check_required_modules
 
 # Enable the site
 sudo a2ensite ${domain_name} > /dev/null 2>&1
@@ -201,6 +549,7 @@ echo "=========================================="
 echo " SETUP COMPLETE"
 echo "=========================================="
 echo "Domain:        ${domain_name}"
+echo "Site Type:     ${site_type^^}"
 echo "System User:   ${username}"
 echo "System Pass:   ${sys_pass}"
 echo "Document Root: ${domain_directory}"
@@ -237,7 +586,7 @@ if [ ! -f "$audit_log" ]; then
     sudo touch "$audit_log"
     sudo chmod 644 "$audit_log"
 fi
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] CREATED: Domain=$domain_name, User=$username, DocRoot=$domain_directory" | sudo tee -a "$audit_log" > /dev/null
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] CREATED: Domain=$domain_name, Type=$site_type, User=$username, DocRoot=$domain_directory" | sudo tee -a "$audit_log" > /dev/null
 
 # Send email notification
 send_setup_email
