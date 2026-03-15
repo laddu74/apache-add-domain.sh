@@ -9,19 +9,22 @@ fi
 # Default values
 site_type="php"
 domain_name=""
+docker_port="8080" # Default port if not specified
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --type=*) site_type="${1#*=}"; shift ;;
         -t|--type) site_type="$2"; shift 2 ;;
+        --port=*) docker_port="${1#*=}"; shift ;;
+        -p|--port) docker_port="$2"; shift 2 ;;
         *) domain_name="$1"; shift ;;
     esac
 done
 
 # Check if domain name argument is provided
 if [ -z "$domain_name" ]; then
-    echo "Usage: sudo $0 <domain_name> [--type=php|perl|python|ror]"
+    echo "Usage: sudo $0 <domain_name> [--type=php|perl|python|ror|docker] [--port=8080]"
     exit 1
 fi
 
@@ -55,6 +58,7 @@ check_required_modules() {
         perl) modules=("cgid" "rewrite" "headers") ;;
         python) modules=("wsgi" "rewrite" "headers") ;;
         ror) modules=("passenger" "rewrite" "headers") ;;
+        docker) modules=("proxy" "proxy_http" "rewrite" "headers") ;;
         php|*) modules=("rewrite" "headers") ;;
     esac
 
@@ -85,6 +89,7 @@ check_required_modules() {
         echo " - WSGI (Python): libapache2-mod-wsgi-py3"
         echo " - Passenger (RoR): libapache2-mod-passenger"
         echo " - Perl: libapache2-mod-perl2 (or just use cgid which is usually built-in)"
+        echo " - Docker (Proxy): Usually pre-installed, just needs a2enmod proxy proxy_http"
         echo "=========================================="
         exit 1
     fi
@@ -245,6 +250,26 @@ ENDSCRIPT
                 sudo mv /tmp/_index_html.$$ "${domain_directory}/public/index.html"
                 sudo chown ${username}:www-data "${domain_directory}/public/index.html"
                 echo "OK Placeholder public/index.html created"
+            fi
+            ;;
+
+        docker)
+            echo "OK Docker proxy selected. Traffic will be forwarded to localhost:${docker_port}"
+            # Create a sample docker-compose.yml as a hint
+            if [ ! -f "${domain_directory}/docker-compose.yml" ]; then
+                cat > /tmp/_docker_compose_yml.$$ <<ENDSCRIPT
+version: '3.8'
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:${docker_port}:80"
+    volumes:
+      - ./public_html:/usr/share/nginx/html
+ENDSCRIPT
+                sudo mv /tmp/_docker_compose_yml.$$ "${domain_directory}/docker-compose.yml"
+                sudo chown ${username}:www-data "${domain_directory}/docker-compose.yml"
+                echo "OK Starter docker-compose.yml created in ${domain_directory}"
             fi
             ;;
 
@@ -475,6 +500,38 @@ EOF
     <Directory ${domain_directory}/public>
         AllowOverride all
         Options -MultiViews
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
+    docker)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:${docker_port}/
+    ProxyPassReverse / http://127.0.0.1:${docker_port}/
+
+    <Directory ${domain_directory}>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
         Require all granted
     </Directory>
 

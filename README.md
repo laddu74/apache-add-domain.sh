@@ -10,7 +10,7 @@ These scripts are optimized for PHP, Perl, Python, and Ruby on Rails application
 This script fully automates the provisioning of a new domain.
 - **System Isolation:** Automatically creates a dedicated system user and a `public_html` directory with restricted permissions (`750` owner/www-data).
 - **Secure Credentials:** Generates a highly secure 16-character random password for the system user (`openssl` generated).
-- **Multi-Platform Support:** Supports PHP (default), Perl, Python (WSGI), and Ruby on Rails (Passenger).
+- **Multi-Platform Support:** Supports PHP (default), Perl, Python (WSGI), Ruby on Rails (Passenger), and Docker (Reverse Proxy).
 - **Module Verification:** Automatically checks for required Apache modules (e.g., `mod_wsgi`, `mod_passenger`, `mod_cgid`) and alerts the user if any are missing.
 - **Database Provisioning:** Creates a dedicated MySQL database and a specific database user, generating another secure random password, and strictly binding privileges.
 - **Apache VirtualHost:** 
@@ -22,7 +22,7 @@ This script fully automates the provisioning of a new domain.
 
 **Usage:**
 ```bash
-sudo ./add_domain.sh example.com [--type=php|perl|python|ror]
+sudo ./add_domain.sh example.com [--type=php|perl|python|ror|docker] [--port=8080]
 ```
 
 ### 2. `delete_domain.sh`
@@ -96,7 +96,7 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Hardened MySQL Authentication**: Support for explicit credential-based or sudo authentication.
 - **Enhanced Feature Toggling**: Consistent use of flags across all scripts.
 ### [2026-03-15]
-- **Multi-Type Site Support:** Added support for Perl, Python (WSGI), and Ruby on Rails (Passenger) sites.
+- **Multi-Type Site Support:** Added support for Perl, Python (WSGI), Ruby on Rails (Passenger), and Docker (Reverse Proxy) sites.
 - **Improved Module Management:** Integrated automated Apache module checking and user alerting for system dependencies.
 - **Dynamic VirtualHost Generation:** Configures Apache based on the `--type` flag.
 - **Password Rotation:** Added `rotate_passwords.sh` to securely rotate system and database passwords for a domain.
