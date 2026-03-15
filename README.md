@@ -59,6 +59,17 @@ This script allows for adding an additional MySQL database to an existing system
 sudo ./add_database.sh username suffix
 ```
 
+### 5. `rotate_passwords.sh`
+This script allows you to securely rotate both the system user and MySQL database passwords for a specific domain.
+- **Automated Rotation:** Generates new secure 16-character passwords using `openssl`.
+- **System & DB Updates:** Automatically updates the Linux account password and the associated database user password.
+- **Secure Logging:** Appends the new credentials to the secure domain setup log file (`/var/log/apache_<domain_name>_setup.log`).
+
+**Usage:**
+```bash
+sudo ./rotate_passwords.sh example.com
+```
+
 ## Security & Notifications
 
 ### Environment Variables (`.env`)
@@ -88,6 +99,7 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Multi-Type Site Support:** Added support for Perl, Python (WSGI), and Ruby on Rails (Passenger) sites.
 - **Improved Module Management:** Integrated automated Apache module checking and user alerting for system dependencies.
 - **Dynamic VirtualHost Generation:** Configures Apache based on the `--type` flag.
+- **Password Rotation:** Added `rotate_passwords.sh` to securely rotate system and database passwords for a domain.
 
 ## IDE / Development Rules
 
