@@ -24,7 +24,7 @@ done
 
 # Check if domain name argument is provided
 if [ -z "$domain_name" ]; then
-    echo "Usage: sudo $0 <domain_name> [--type=php|perl|python|ror|docker] [--port=8080]"
+    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker] [--port=8080]"
     exit 1
 fi
 
@@ -59,6 +59,7 @@ check_required_modules() {
         python) modules=("wsgi" "rewrite" "headers") ;;
         ror) modules=("passenger" "rewrite" "headers") ;;
         docker) modules=("proxy" "proxy_http" "rewrite" "headers") ;;
+        wordpress) modules=("rewrite" "headers" "security2") ;;
         php|*) modules=("rewrite" "headers") ;;
     esac
 
@@ -273,7 +274,7 @@ ENDSCRIPT
             fi
             ;;
 
-        php|*)
+        php|wordpress|*)
             # Check PHP interpreter
             if ! command -v php &> /dev/null; then
                 echo "WARNING: PHP is not installed."
@@ -283,16 +284,20 @@ ENDSCRIPT
                 echo "OK ${PHP_VER} found"
             fi
 
-            # Starter index.php
-            if [ ! -f "${domain_directory}/index.php" ]; then
-                cat > /tmp/_index_php.$$ <<'ENDSCRIPT'
+            # Starter index.php (only if not wordpress, as wordpress will have its own setup)
+            if [ "${site_type,,}" != "wordpress" ]; then
+                if [ ! -f "${domain_directory}/index.php" ]; then
+                    cat > /tmp/_index_php.$$ <<'ENDSCRIPT'
 <?php
 echo "<html><body><h1>Hello from PHP!</h1></body></html>";
 ENDSCRIPT
-                sudo mv /tmp/_index_php.$$ "${domain_directory}/index.php"
-                sudo chown ${username}:www-data "${domain_directory}/index.php"
-                sudo chmod 644 "${domain_directory}/index.php"
-                echo "OK Starter index.php created"
+                    sudo mv /tmp/_index_php.$$ "${domain_directory}/index.php"
+                    sudo chown ${username}:www-data "${domain_directory}/index.php"
+                    sudo chmod 644 "${domain_directory}/index.php"
+                    echo "OK Starter index.php created"
+                fi
+            else
+                echo "INFO: WordPress type selected. Please upload WordPress files to ${domain_directory}"
             fi
             ;;
     esac
@@ -550,7 +555,49 @@ EOF
 EOF
 )
         ;;
-    php|*)
+    php|wordpress|*)
+        MODSEC_CONFIG=""
+        if [ "${site_type,,}" = "wordpress" ]; then
+            # Ensure the exclusions directory and file exist
+            MODSEC_RULES_DIR="/etc/apache2/modsecurity-rules"
+            MODSEC_WP_EXCLUSIONS="${MODSEC_RULES_DIR}/wordpress-exclusions.conf"
+            sudo mkdir -p "$MODSEC_RULES_DIR"
+            
+            if [ ! -f "$MODSEC_WP_EXCLUSIONS" ]; then
+                cat <<'MODSEC_EOF' | sudo tee "$MODSEC_WP_EXCLUSIONS" > /dev/null
+# WordPress ModSecurity Exclusions
+# These rules help prevent false positives for common WordPress administrative actions.
+
+# 1. Allow WordPress Admin POST requests (Skip certain checks for known paths)
+SecRule REQUEST_URI "@contains /wp-admin/" \
+    "id:10001,phase:2,nolog,pass,ctl:ruleRemoveById=941100,ctl:ruleRemoveById=942100,ctl:ruleRemoveById=932150"
+
+# 2. Support WordPress REST API
+SecRule REQUEST_URI "@contains /wp-json/" \
+    "id:10002,phase:2,nolog,pass,ctl:ruleRemoveById=942100,ctl:ruleRemoveById=300013,ctl:ruleRemoveById=300015,ctl:ruleRemoveById=300016,ctl:ruleRemoveById=300017"
+
+# 3. Handle XML-RPC if used
+SecRule REQUEST_URI "@contains xmlrpc.php" \
+    "id:10003,phase:2,nolog,pass,ctl:ruleRemoveById=942100"
+
+# 4. Global exclusions for common false positives in WordPress
+# (Add more IDs here as identified in logs)
+MODSEC_EOF
+                echo "OK Created ModSecurity WordPress exclusions: $MODSEC_WP_EXCLUSIONS"
+            fi
+
+            MODSEC_CONFIG=$(cat <<MODSEC_BLOCK
+    # ModSecurity Configuration for WordPress
+    <IfModule security2_module>
+        SecRuleEngine On
+        SecAuditEngine On
+        SecAuditLog \${APACHE_LOG_DIR}/${domain_name}_modsec_audit.log
+        Include "$MODSEC_WP_EXCLUSIONS"
+    </IfModule>
+MODSEC_BLOCK
+)
+        fi
+
         VHOST_CONFIG=$(cat <<EOF
 <VirtualHost *:80>
     ServerName ${domain_name}
@@ -571,6 +618,8 @@ EOF
     Header always set X-Frame-Options "SAMEORIGIN"
     Header always set X-XSS-Protection "1; mode=block"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+${MODSEC_CONFIG}
 
     ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
     CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
