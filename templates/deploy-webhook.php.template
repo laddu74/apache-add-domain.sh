@@ -1,0 +1,49 @@
+<?php
+/**
+ * Git Deployment Webhook Receiver
+ * Supports GitHub secret validation and simple token.
+ */
+
+// Configuration (Replaced during setup)
+$secret = "{{GIT_SECRET}}";
+$sync_command = "sudo -u {{USERNAME}} {{SYNC_SCRIPT}}";
+$log_file = "{{LOG_FILE}}";
+
+function log_message($msg) {
+    global $log_file;
+    file_put_contents($log_file, "[" . date("Y-m-d H:i:s") . "] " . $msg . "\n", FILE_APPEND);
+}
+
+// 1. Validate Secret
+$headers = getallheaders();
+$hub_signature = isset($headers['X-Hub-Signature-256']) ? $headers['X-Hub-Signature-256'] : '';
+
+$valid = false;
+$payload = file_get_contents('php://input');
+
+if ($hub_signature && $secret) {
+    // GitHub HMAC validation
+    list($algo, $hash) = explode('=', $hub_signature, 2);
+    $payload_hash = hash_hmac('sha256', $payload, $secret);
+    if (hash_equals($payload_hash, $hash)) {
+        $valid = true;
+    }
+} elseif (isset($_GET['secret']) && $_GET['secret'] === $secret) {
+    // Simple GET secret validation
+    $valid = true;
+}
+
+if (!$valid) {
+    header('HTTP/1.1 403 Forbidden');
+    log_message("Forbidden: Invalid secret or signature.");
+    echo "Forbidden";
+    exit;
+}
+
+// 2. Execute Sync
+log_message("Webhook caught! Triggering sync...");
+$output = shell_exec($sync_command . " 2>&1");
+log_message("Output: " . $output);
+
+echo "Deployment triggered successfully.";
+?>

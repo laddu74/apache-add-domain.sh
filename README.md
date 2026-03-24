@@ -19,10 +19,15 @@ This script fully automates the provisioning of a new domain.
   - Hardens security by blocking directory listings (`-Indexes`) and hidden files/directories (like `.git` or `.env`).
   - Implements modern Security Headers (`nosniff`, `SAMEORIGIN`, `XSS-Protection`, `Referrer-Policy`).
 - **Secure Logging:** Securely logs the generated credentials (DB User, DB Pass, System Pass, etc.) to a root-only accessible log file: `/var/log/apache_<domain_name>_setup.log`.
+- **Git Sync (Optional):**
+  - **Automated Cloning:** Automatically clones a Git repository into `public_html` if `--git-url` is provided.
+  - **Webhook Support:** Sets up a PHP webhook receiver (`deploy-webhook.php`) and a secure synchronization script (`.git-sync.sh`).
+  - **Zero-Touch Updates:** Supports GitHub/GitLab webhooks (with secret validation) to automatically pull changes on push.
+  - **Sudo Integration:** Configures granular sudo permissions to allow the web server to trigger updates safely as the domain user.
 
 **Usage:**
 ```bash
-sudo ./add_domain.sh example.com [--type=php|perl|python|ror|docker] [--port=8080]
+sudo ./add_domain.sh example.com [--type=php|...] [--git-url=URL] [--git-branch=main] [--git-secret=SECRET]
 ```
 
 ### 2. `delete_domain.sh`
@@ -100,6 +105,11 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Improved Module Management:** Integrated automated Apache module checking and user alerting for system dependencies.
 - **Dynamic VirtualHost Generation:** Configures Apache based on the `--type` flag.
 - **Password Rotation:** Added `rotate_passwords.sh` to securely rotate system and database passwords for a domain.
+
+### [2026-03-24]
+- **Git Sync Support:** Integrated `--git-url` for automated repository cloning during setup.
+- **Webhook Integration:** Added PHP webhook receiver and shell sync script for automated deployments.
+- **Secure Sudoers Config:** Automated `sudoers.d` generation for secure cross-user synchronization.
 
 ## IDE / Development Rules
 

@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Configuration
+REPO_PATH="{{REPO_PATH}}"
+BRANCH="{{BRANCH}}"
+LOG_FILE="{{LOG_FILE}}"
+
+# Ensure we're in the repository
+cd "$REPO_PATH" || { echo "ERROR: Could not change directory to $REPO_PATH" >> "$LOG_FILE"; exit 1; }
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Git sync for $BRANCH" >> "$LOG_FILE"
+
+# Fetch latest changes
+git fetch origin "$BRANCH" >> "$LOG_FILE" 2>&1
+
+# Hard reset to match remote
+git reset --hard "origin/$BRANCH" >> "$LOG_FILE" 2>&1
+
+# Update submodules if any
+if [ -f ".gitmodules" ]; then
+    git submodule update --init --recursive >> "$LOG_FILE" 2>&1
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Git sync complete." >> "$LOG_FILE"
+echo "------------------------------------------" >> "$LOG_FILE"
