@@ -10,6 +10,10 @@ fi
 site_type="php"
 domain_name=""
 docker_port="8080" # Default port if not specified
+git_url=""
+git_branch="main"
+git_secret=$(openssl rand -hex 16)
+php_version="" # Default to empty, will prompt or use default later
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -18,13 +22,17 @@ while [[ "$#" -gt 0 ]]; do
         -t|--type) site_type="$2"; shift 2 ;;
         --port=*) docker_port="${1#*=}"; shift ;;
         -p|--port) docker_port="$2"; shift 2 ;;
+        --git-url=*) git_url="${1#*=}"; shift ;;
+        --git-branch=*) git_branch="${1#*=}"; shift ;;
+        --git-secret=*) git_secret="${1#*=}"; shift ;;
+        --php=*) php_version="${1#*=}"; shift ;;
         *) domain_name="$1"; shift ;;
     esac
 done
 
 # Check if domain name argument is provided
 if [ -z "$domain_name" ]; then
-    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker] [--port=8080]"
+    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker] [--port=8080] [--php=8.2]"
     exit 1
 fi
 
@@ -59,8 +67,8 @@ check_required_modules() {
         python) modules=("wsgi" "rewrite" "headers") ;;
         ror) modules=("passenger" "rewrite" "headers") ;;
         docker) modules=("proxy" "proxy_http" "rewrite" "headers") ;;
-        wordpress) modules=("rewrite" "headers" "security2") ;;
-        php|*) modules=("rewrite" "headers") ;;
+        wordpress) modules=("rewrite" "headers" "security2" "proxy_fcgi" "setenvif") ;;
+        php|*) modules=("rewrite" "headers" "proxy_fcgi" "setenvif") ;;
     esac
 
     local missing_modules=()
@@ -275,13 +283,34 @@ ENDSCRIPT
             ;;
 
         php|wordpress|*)
-            # Check PHP interpreter
-            if ! command -v php &> /dev/null; then
-                echo "WARNING: PHP is not installed."
-                echo "  Install with: sudo apt install php libapache2-mod-php php-mysql"
-            else
-                PHP_VER=$(php --version | head -n 1)
-                echo "OK ${PHP_VER} found"
+            # PHP Version Selection
+            if [ -z "$php_version" ]; then
+                echo "Available PHP versions:"
+                installed_versions=$(ls /etc/php/ | grep -E '^[0-9]+\.[0-9]+$' | sort -r)
+                if [ -z "$installed_versions" ]; then
+                    echo "WARNING: No PHP versions found in /etc/php/"
+                    php_version="8.2" # Fallback
+                else
+                    PS3="Please select PHP version (default: $(echo "$installed_versions" | head -n 1)): "
+                    options=($installed_versions)
+                    select opt in "${options[@]}"; do
+                        if [ -n "$opt" ]; then
+                            php_version=$opt
+                            break
+                        fi
+                    done
+                    # If user just presses enter, use the first one
+                    if [ -z "$php_version" ]; then
+                        php_version=$(echo "$installed_versions" | head -n 1)
+                    fi
+                fi
+            fi
+            echo "Selected PHP version: ${php_version}"
+
+            # Check PHP-FPM service
+            if ! systemctl is-active --quiet "php${php_version}-fpm"; then
+                echo "WARNING: php${php_version}-fpm is not running. Attempting to start..."
+                sudo systemctl start "php${php_version}-fpm"
             fi
 
             # Starter index.php (only if not wordpress, as wordpress will have its own setup)
@@ -289,7 +318,7 @@ ENDSCRIPT
                 if [ ! -f "${domain_directory}/index.php" ]; then
                     cat > /tmp/_index_php.$$ <<'ENDSCRIPT'
 <?php
-echo "<html><body><h1>Hello from PHP!</h1></body></html>";
+phpinfo();
 ENDSCRIPT
                     sudo mv /tmp/_index_php.$$ "${domain_directory}/index.php"
                     sudo chown ${username}:www-data "${domain_directory}/index.php"
@@ -301,6 +330,70 @@ ENDSCRIPT
             fi
             ;;
     esac
+
+    # Git Repository Setup
+    if [ -n "$git_url" ]; then
+        echo "=========================================="
+        echo "  Git Repository Setup"
+        echo "=========================================="
+        
+        if ! command -v git &> /dev/null; then
+            echo "ERROR: Git is not installed. Installing git..."
+            sudo apt update && sudo apt install -y git
+        fi
+
+        # Move existing index files if any
+        if [ "$(ls -A ${domain_directory})" ]; then
+            echo "Moving existing files to backup..."
+            sudo mkdir -p "${domain_directory}/_backup_$(date +%s)"
+            sudo mv ${domain_directory}/* "${domain_directory}/_backup_$(date +%s)/" 2>/dev/null
+        fi
+
+        echo "Cloning repository: $git_url (branch: $git_branch)"
+        sudo -u "${username}" git clone -b "$git_branch" "$git_url" "${domain_directory}"
+        
+        if [ $? -eq 0 ]; then
+            echo "OK Repository cloned successfully."
+            
+            # Setup Git Sync Script
+            sync_script="${user_home}/.git-sync.sh"
+            sync_log="${user_home}/git-sync.log"
+            template_dir="$(dirname "$0")/templates"
+            
+            if [ -f "${template_dir}/git-sync.sh.template" ]; then
+                sudo cp "${template_dir}/git-sync.sh.template" "$sync_script"
+                sudo sed -i "s|{{REPO_PATH}}|${domain_directory}|g" "$sync_script"
+                sudo sed -i "s|{{BRANCH}}|${git_branch}|g" "$sync_script"
+                sudo sed -i "s|{{LOG_FILE}}|${sync_log}|g" "$sync_script"
+                sudo chown ${username}:${username} "$sync_script"
+                sudo chmod 700 "$sync_script"
+                sudo touch "$sync_log"
+                sudo chown ${username}:${username} "$sync_log"
+                echo "OK Sync script created at $sync_script"
+            fi
+
+            # Setup Webhook Receiver
+            webhook_file="${domain_directory}/deploy-webhook.php"
+            if [ -f "${template_dir}/deploy-webhook.php.template" ]; then
+                sudo cp "${template_dir}/deploy-webhook.php.template" "$webhook_file"
+                sudo sed -i "s|{{GIT_SECRET}}|${git_secret}|g" "$webhook_file"
+                sudo sed -i "s|{{USERNAME}}|${username}|g" "$webhook_file"
+                sudo sed -i "s|{{SYNC_SCRIPT}}|${sync_script}|g" "$webhook_file"
+                sudo sed -i "s|{{LOG_FILE}}|${sync_log}|g" "$webhook_file"
+                sudo chown ${username}:www-data "$webhook_file"
+                sudo chmod 644 "$webhook_file"
+                echo "OK Webhook receiver created at $webhook_file"
+            fi
+
+            # Configure Sudoers for www-data to trigger sync
+            sudoers_file="/etc/sudoers.d/git-sync-${username}"
+            echo "www-data ALL=(${username}) NOPASSWD: ${sync_script}" | sudo tee "$sudoers_file" > /dev/null
+            sudo chmod 440 "$sudoers_file"
+            echo "OK Sudoers configuration added for webhook triggers."
+        else
+            echo "ERROR: Failed to clone repository."
+        fi
+    fi
 
     echo "Runtime environment setup complete."
     echo "=========================================="
@@ -323,6 +416,11 @@ send_setup_email() {
     echo "=========================================="
     
     # Prepare JSON payload
+    git_info=""
+    if [ -n "$git_url" ]; then
+        git_info="\nGit Repo: $git_url\nGit Branch: $git_branch\nWebhook Secret: $git_secret\nWebhook URL: http://$domain_name/deploy-webhook.php"
+    fi
+
     email_json=$(cat <<EOF
 {
   "personalizations": [{
@@ -332,7 +430,7 @@ send_setup_email() {
   "subject": "New Domain Setup: $domain_name",
   "content": [{
     "type": "text/plain",
-    "value": "Domain Setup Details:\n\nDomain: $domain_name\nSystem User: $username\nSystem Pass: $sys_pass\nDocument Root: $domain_directory\n\nDatabase Info:\nDB Name: $db_name\nDB User: $db_user\nDB Password: $db_pass"
+    "value": "Domain Setup Details:\n\nDomain: $domain_name\nSystem User: $username\nSystem Pass: $sys_pass\nDocument Root: $domain_directory\n\nDatabase Info:\nDB Name: $db_name\nDB User: $db_user\nDB Password: $db_pass$git_info"
   }]
 }
 EOF
@@ -610,6 +708,10 @@ MODSEC_BLOCK
         Require all granted
     </Directory>
 
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/run/php/php${php_version}-fpm.sock|fcgi://localhost"
+    </FilesMatch>
+
     <DirectoryMatch "/\.(?!well-known)">
         Require all denied
     </DirectoryMatch>
@@ -664,6 +766,14 @@ echo "Database Info (Save this!):"
 echo "DB Name:       ${db_name}"
 echo "DB User:       ${db_user}"
 echo "DB Password:   ${db_pass}"
+if [ -n "$git_url" ]; then
+    echo ""
+    echo "Git Info:"
+    echo "Repo URL:      ${git_url}"
+    echo "Branch:        ${git_branch}"
+    echo "Webhook Sec:   ${git_secret}"
+    echo "Webhook URL:   http://${domain_name}/deploy-webhook.php"
+fi
 echo "=========================================="
 
 # Log credentials to a secure file
@@ -680,6 +790,9 @@ Document Root: ${domain_directory}
 DB Name:       ${db_name}
 DB User:       ${db_user}
 DB Password:   ${db_pass}
+Git Repo:      ${git_url:-"none"}
+Git Branch:    ${git_branch:-"none"}
+Git Secret:    ${git_secret:-"none"}
 ==========================================
 EOF
 
