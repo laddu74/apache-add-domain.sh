@@ -10,8 +10,13 @@ These scripts are optimized for PHP, Perl, Python, and Ruby on Rails application
 This script fully automates the provisioning of a new domain.
 - **System Isolation:** Automatically creates a dedicated system user and a `public_html` directory with restricted permissions (`750` owner/www-data).
 - **Secure Credentials:** Generates a highly secure 16-character random password for the system user (`openssl` generated).
-- **Multi-Platform Support:** Supports PHP (default), Perl, Python (WSGI), Ruby on Rails (Passenger), and Docker (Reverse Proxy).
-- **Module Verification:** Automatically checks for required Apache modules (e.g., `mod_wsgi`, `mod_passenger`, `mod_cgid`) and alerts the user if any are missing.
+- **Multi-Platform Support:** Supports PHP (default), WordPress, Perl, Python (WSGI), Ruby on Rails (Passenger), and Docker (Reverse Proxy).
+- **PHP Versioning:** 
+  - Allows selecting specific PHP versions via `--php=X.X` (e.g., 7.4, 8.1, 8.3).
+  - Automatically discovers installed PHP versions on the system.
+  - Interactive prompt if no version is specified.
+  - Native PHP-FPM support for high performance and side-by-side versions.
+- **Module Verification:** Automatically checks for required Apache modules (e.g., `mod_wsgi`, `mod_passenger`, `mod_proxy_fcgi`) and alerts the user if any are missing.
 - **Database Provisioning:** Creates a dedicated MySQL database and a specific database user, generating another secure random password, and strictly binding privileges.
 - **Apache VirtualHost:** 
   - Generates an Apache `.conf` file tailored to the application type.
@@ -27,7 +32,7 @@ This script fully automates the provisioning of a new domain.
 
 **Usage:**
 ```bash
-sudo ./add_domain.sh example.com [--type=php|...] [--git-url=URL] [--git-branch=main] [--git-secret=SECRET]
+sudo ./add_domain.sh example.com [--type=php|wordpress|...] [--php=8.2] [--git-url=URL] [--git-branch=main]
 ```
 
 ### 2. `delete_domain.sh`
@@ -75,6 +80,18 @@ This script allows you to securely rotate both the system user and MySQL databas
 sudo ./rotate_passwords.sh example.com
 ```
 
+### 6. `clone_domain.sh`
+This script allows for cloning a full domain and its associated database.
+- **Interactive Cloning:** Prompts for source database credentials if they cannot be automatically discovered.
+- **Recursive Find-Replace:** Automatically scans all files and the database dump to replace the old domain name and credentials with new ones.
+- **Integrated Setup:** Leverages `add_domain.sh` to ensure the new domain is set up correctly with isolated users and secure permissions.
+- **Automation Friendly:** Supports root-level cloning by automatically finding credentials in existing setup logs.
+
+**Usage:**
+```bash
+sudo ./clone_domain.sh source.com target.com
+```
+
 ## Security & Notifications
 
 ### Environment Variables (`.env`)
@@ -106,10 +123,12 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Dynamic VirtualHost Generation:** Configures Apache based on the `--type` flag.
 - **Password Rotation:** Added `rotate_passwords.sh` to securely rotate system and database passwords for a domain.
 
-### [2026-03-24]
-- **Git Sync Support:** Integrated `--git-url` for automated repository cloning during setup.
-- **Webhook Integration:** Added PHP webhook receiver and shell sync script for automated deployments.
-- **Secure Sudoers Config:** Automated `sudoers.d` generation for secure cross-user synchronization.
+### [2026-03-31]
+- **Multi-PHP Support**: Integrated PHP-FPM with support for multiple side-by-side PHP versions.
+- **Automatic PHP Discovery**: Script now detects installed PHP versions and offers an interactive selection.
+- **Domain Cloning**: Added `clone_domain.sh` for full site and database duplication.
+- **Recursive Find-Replace**: Cloning process automatically updates domain names and credentials in files and DB.
+- **Enhanced `add_domain.sh` CLI**: Added support for passing manual database and system credentials via arguments.
 
 ## IDE / Development Rules
 
