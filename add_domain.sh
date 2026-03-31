@@ -26,6 +26,10 @@ while [[ "$#" -gt 0 ]]; do
         --git-branch=*) git_branch="${1#*=}"; shift ;;
         --git-secret=*) git_secret="${1#*=}"; shift ;;
         --php=*) php_version="${1#*=}"; shift ;;
+        --db-name=*) db_name="${1#*=}"; shift ;;
+        --db-user=*) db_user="${1#*=}"; shift ;;
+        --db-pass=*) db_pass="${1#*=}"; shift ;;
+        --sys-pass=*) sys_pass="${1#*=}"; shift ;;
         *) domain_name="$1"; shift ;;
     esac
 done
@@ -449,14 +453,14 @@ EOF
     fi
 }
 
-# Generate username from domain name (alphanumeric, max 16 chars for legacy DB compatibility)
-username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
-sys_pass=$(openssl rand -base64 16)
+# Generate username from domain name if not already set (alphanumeric, max 16 chars for legacy DB compatibility)
+username=${username:-$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)}
+sys_pass=${sys_pass:-$(openssl rand -base64 16)}
 
 # Database credentials
-db_name="${username}_db"
-db_user="${username}_usr"
-db_pass=$(openssl rand -base64 16)
+db_name=${db_name:-"${username}_db"}
+db_user=${db_user:-"${username}_usr"}
+db_pass=${db_pass:-$(openssl rand -base64 16)}
 
 # Directories
 user_home="/home/${username}"
