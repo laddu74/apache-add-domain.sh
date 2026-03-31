@@ -13,6 +13,7 @@ docker_port="8080" # Default port if not specified
 git_url=""
 git_branch="main"
 git_secret=$(openssl rand -hex 16)
+php_version="" # Default to empty, will prompt or use default later
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -24,13 +25,14 @@ while [[ "$#" -gt 0 ]]; do
         --git-url=*) git_url="${1#*=}"; shift ;;
         --git-branch=*) git_branch="${1#*=}"; shift ;;
         --git-secret=*) git_secret="${1#*=}"; shift ;;
+        --php=*) php_version="${1#*=}"; shift ;;
         *) domain_name="$1"; shift ;;
     esac
 done
 
 # Check if domain name argument is provided
 if [ -z "$domain_name" ]; then
-    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker] [--port=8080]"
+    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker] [--port=8080] [--php=8.2]"
     exit 1
 fi
 
@@ -65,8 +67,8 @@ check_required_modules() {
         python) modules=("wsgi" "rewrite" "headers") ;;
         ror) modules=("passenger" "rewrite" "headers") ;;
         docker) modules=("proxy" "proxy_http" "rewrite" "headers") ;;
-        wordpress) modules=("rewrite" "headers" "security2") ;;
-        php|*) modules=("rewrite" "headers") ;;
+        wordpress) modules=("rewrite" "headers" "security2" "proxy_fcgi" "setenvif") ;;
+        php|*) modules=("rewrite" "headers" "proxy_fcgi" "setenvif") ;;
     esac
 
     local missing_modules=()
@@ -281,13 +283,34 @@ ENDSCRIPT
             ;;
 
         php|wordpress|*)
-            # Check PHP interpreter
-            if ! command -v php &> /dev/null; then
-                echo "WARNING: PHP is not installed."
-                echo "  Install with: sudo apt install php libapache2-mod-php php-mysql"
-            else
-                PHP_VER=$(php --version | head -n 1)
-                echo "OK ${PHP_VER} found"
+            # PHP Version Selection
+            if [ -z "$php_version" ]; then
+                echo "Available PHP versions:"
+                installed_versions=$(ls /etc/php/ | grep -E '^[0-9]+\.[0-9]+$' | sort -r)
+                if [ -z "$installed_versions" ]; then
+                    echo "WARNING: No PHP versions found in /etc/php/"
+                    php_version="8.2" # Fallback
+                else
+                    PS3="Please select PHP version (default: $(echo "$installed_versions" | head -n 1)): "
+                    options=($installed_versions)
+                    select opt in "${options[@]}"; do
+                        if [ -n "$opt" ]; then
+                            php_version=$opt
+                            break
+                        fi
+                    done
+                    # If user just presses enter, use the first one
+                    if [ -z "$php_version" ]; then
+                        php_version=$(echo "$installed_versions" | head -n 1)
+                    fi
+                fi
+            fi
+            echo "Selected PHP version: ${php_version}"
+
+            # Check PHP-FPM service
+            if ! systemctl is-active --quiet "php${php_version}-fpm"; then
+                echo "WARNING: php${php_version}-fpm is not running. Attempting to start..."
+                sudo systemctl start "php${php_version}-fpm"
             fi
 
             # Starter index.php (only if not wordpress, as wordpress will have its own setup)
@@ -295,7 +318,7 @@ ENDSCRIPT
                 if [ ! -f "${domain_directory}/index.php" ]; then
                     cat > /tmp/_index_php.$$ <<'ENDSCRIPT'
 <?php
-echo "<html><body><h1>Hello from PHP!</h1></body></html>";
+phpinfo();
 ENDSCRIPT
                     sudo mv /tmp/_index_php.$$ "${domain_directory}/index.php"
                     sudo chown ${username}:www-data "${domain_directory}/index.php"
@@ -684,6 +707,10 @@ MODSEC_BLOCK
         AllowOverride All
         Require all granted
     </Directory>
+
+    <FilesMatch \.php$>
+        SetHandler "proxy:unix:/run/php/php${php_version}-fpm.sock|fcgi://localhost"
+    </FilesMatch>
 
     <DirectoryMatch "/\.(?!well-known)">
         Require all denied
