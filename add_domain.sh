@@ -111,6 +111,47 @@ check_required_modules() {
 # Run module check
 check_required_modules
 
+# Function to add PHP repository (PPA/Debian repo)
+setup_php_repository() {
+    local os_type=$(lsb_release -si 2>/dev/null || [ -f /etc/debian_version ] && echo "Debian" || echo "Unknown")
+    
+    if [[ "$os_type" == "Ubuntu" ]]; then
+        if ! grep -q "^deb .*ondrej/php" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; then
+            echo "=========================================="
+            echo " PHP Repository Setup (Ubuntu)"
+            echo "=========================================="
+            echo "The Ondrej Sury PHP repository (ppa:ondrej/php) is recommended for multiple PHP versions."
+            read -p "Would you like to add it now to support versions like PHP 8.4? (y/n): " add_repo
+            if [[ "$add_repo" =~ ^[Yy]$ ]]; then
+                sudo apt update
+                sudo apt install -y software-properties-common
+                sudo add-apt-repository -y ppa:ondrej/php
+                sudo apt update
+                echo "OK PHP repository added successfully."
+                return 0
+            fi
+        fi
+    elif [[ "$os_type" == "Debian" ]]; then
+        if [ ! -f /etc/apt/sources.list.d/php.list ] && ! grep -q "^deb .*sury.org" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null; then
+            echo "=========================================="
+            echo " PHP Repository Setup (Debian)"
+            echo "=========================================="
+            echo "The SURY.org Debian PHP repository is recommended for modern PHP versions."
+            read -p "Would you like to add it now? (y/n): " add_repo
+            if [[ "$add_repo" =~ ^[Yy]$ ]]; then
+                sudo apt update
+                sudo apt install -y apt-transport-https lsb-release ca-certificates curl
+                sudo curl -sSLo /usr/share/keyrings/deb.sury.org-php.gpg https://packages.sury.org/php/apt.gpg
+                echo "deb [signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/php.list
+                sudo apt update
+                echo "OK PHP repository added successfully."
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
 # Function to check runtime tools and scaffold the environment for the site type
 # (called AFTER user + directory creation so chown/mkdir works correctly)
 setup_runtime_environment() {
@@ -293,28 +334,86 @@ ENDSCRIPT
                 installed_versions=$(ls /etc/php/ | grep -E '^[0-9]+\.[0-9]+$' | sort -r)
                 if [ -z "$installed_versions" ]; then
                     echo "WARNING: No PHP versions found in /etc/php/"
-                    php_version="8.2" # Fallback
+                    php_version="8.4" # Fallback
                 else
-                    PS3="Please select PHP version (default: $(echo "$installed_versions" | head -n 1)): "
                     options=($installed_versions)
-                    select opt in "${options[@]}"; do
-                        if [ -n "$opt" ]; then
-                            php_version=$opt
+                    default_version=$(echo "$installed_versions" | head -n 1)
+                    PS3="Please select PHP version (default: $default_version): "
+                    
+                    while true; do
+                        # Use read to support Enter key for default
+                        read -p "$PS3" user_input
+                        
+                        # Use default if Enter is pressed
+                        if [ -z "$user_input" ]; then
+                            php_version=$default_version
                             break
                         fi
+                        
+                        # Check if input matches an index
+                        if [[ "$user_input" =~ ^[0-9]+$ ]] && [ "$user_input" -le "${#options[@]}" ] && [ "$user_input" -gt 0 ]; then
+                            php_version="${options[$((user_input-1))]}"
+                            break
+                        fi
+                        
+                        # Check if input matches a version string directly
+                        for v in "${options[@]}"; do
+                            if [[ "$user_input" == "$v" ]]; then
+                                php_version=$v
+                                break 2
+                            fi
+                        done
+                        
+                        echo "Invalid selection: $user_input. Please choose a number from the list or press Enter for default ($default_version)."
+                        # Re-display the menu since we're using read
+                        for i in "${!options[@]}"; do
+                            echo "$((i+1))) ${options[i]}"
+                        done
                     done
-                    # If user just presses enter, use the first one
-                    if [ -z "$php_version" ]; then
-                        php_version=$(echo "$installed_versions" | head -n 1)
-                    fi
                 fi
             fi
+
+            # Verification and Installation of PHP-FPM
+            if ! dpkg -s "php${php_version}-fpm" &> /dev/null; then
+                echo "=========================================="
+                echo " Missing PHP-${php_version}-FPM"
+                echo "=========================================="
+                echo "The package php${php_version}-fpm is NOT installed."
+                
+                # Check if it even exists in apt
+                if ! apt-cache show "php${php_version}-fpm" &> /dev/null; then
+                    echo "WARNING: php${php_version}-fpm was not found in current repositories."
+                    setup_php_repository
+                fi
+
+                read -p "Would you like to install php${php_version}-fpm now? (y/n): " install_fpm
+                if [[ "$install_fpm" =~ ^[Yy]$ ]]; then
+                    sudo apt update
+                    sudo apt install -y "php${php_version}-fpm" "php${php_version}-mysql" "php${php_version}-curl" "php${php_version}-gd" "php${php_version}-xml" "php${php_version}-mbstring"
+                    if [ $? -eq 0 ]; then
+                        echo "OK php${php_version}-fpm installed successfully."
+                    else
+                        echo "ERROR: Failed to install php${php_version}-fpm. Please install it manually."
+                    fi
+                else
+                    echo "WARNING: Proceeding without installation. Site may show 503 error if FPM is not running."
+                fi
+            fi
+
             echo "Selected PHP version: ${php_version}"
 
+            # Ensure socket directory exists (sometimes missing on clean installs)
+            sudo mkdir -p /run/php
+
             # Check PHP-FPM service
-            if ! systemctl is-active --quiet "php${php_version}-fpm"; then
-                echo "WARNING: php${php_version}-fpm is not running. Attempting to start..."
-                sudo systemctl start "php${php_version}-fpm"
+            if systemctl list-unit-files "php${php_version}-fpm*" | grep -q "php${php_version}-fpm"; then
+                if ! systemctl is-active --quiet "php${php_version}-fpm"; then
+                    echo "WARNING: php${php_version}-fpm is not running. Attempting to start..."
+                    sudo systemctl start "php${php_version}-fpm"
+                    sudo systemctl enable "php${php_version}-fpm" > /dev/null 2>&1
+                fi
+            else
+                echo "ERROR: Service php${php_version}-fpm not found. Please install it: sudo apt install php${php_version}-fpm"
             fi
 
             # Starter index.php (only if not wordpress, as wordpress will have its own setup)
