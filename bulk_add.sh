@@ -13,6 +13,7 @@ if [ $# -ne 1 ]; then
 fi
 
 domains_file=$1
+shift # Remove the domains_file from the arguments list
 
 if [ ! -f "$domains_file" ]; then
     echo "Error: File $domains_file not found."
@@ -31,8 +32,8 @@ while IFS= read -r domain || [ -n "$domain" ]; do
     domain=$(echo "$domain" | xargs)
     
     echo ">>> Provisioning: $domain"
-    # Call the existing add_domain.sh script
-    ./add_domain.sh "$domain"
+    # Call the existing add_domain.sh script with any extra provided flags
+    ./add_domain.sh "$domain" "$@"
     echo "------------------------------------------"
 done < "$domains_file"
 

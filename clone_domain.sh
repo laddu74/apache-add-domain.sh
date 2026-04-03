@@ -143,10 +143,10 @@ echo "Performing recursive find-replace in files..."
 echo "------------------------------------------"
 
 # Avoid infinite loops or replacing binary files if possible
-# We'll use a simple approach for now
+# We'll use a simple approach for now (find and sed)
 find "${NEW_DOCROOT}" -type f -not -path '*/.*' -exec sed -i "s|${SOURCE_DOMAIN}|${TARGET_DOMAIN}|g" {} +
 if [ -n "$OLD_DB_USER" ]; then
-    find "${NEW_DOCROOT}" -type f -not -path '*/.*' -exec sed -i "s|${OLD_DB_USER}|${NEW_DB_USER}|g" {} +
+    find "${NEW_DOCROOT}" -type f -not -path '*/.*' -exec sed -i "s|${OLD_DB_USER}|NEW_DB_USER|g" {} +
 fi
 if [ -n "$OLD_DB_PASS" ]; then
     find "${NEW_DOCROOT}" -type f -not -path '*/.*' -exec sed -i "s|${OLD_DB_PASS}|${NEW_DB_PASS}|g" {} +
@@ -154,6 +154,20 @@ fi
 if [ -n "$OLD_DB_NAME" ]; then
     find "${NEW_DOCROOT}" -type f -not -path '*/.*' -exec sed -i "s|${OLD_DB_NAME}|${NEW_DB_NAME}|g" {} +
 fi
+
+# 6. Final Permissions Check
+# Ensure everything is accessible by Apache (755)
+sudo chmod -R 755 "${NEW_DOCROOT}"
+sudo chmod 755 "/home/${TARGET_USER}"
+echo "OK Permissions standardized to 755."
+
+# 7. Centralized Audit Log
+audit_log="/var/log/apache_setup_audit.log"
+if [ ! -f "$audit_log" ]; then
+    sudo touch "$audit_log"
+    sudo chmod 644 "$audit_log"
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] CLONED: Source=$SOURCE_DOMAIN, Target=$TARGET_DOMAIN, User=$TARGET_USER" | sudo tee -a "$audit_log" > /dev/null
 
 echo "=========================================="
 echo " CLONE COMPLETE"
