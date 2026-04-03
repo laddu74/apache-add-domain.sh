@@ -587,10 +587,10 @@ sudo mkdir -p "${domain_directory}"
 # Secure permissions
 # Set owner to new user, group to www-data (Apache)
 sudo chown -R ${username}:www-data "${user_home}"
-# 750: User can read/write/execute, www-data can read/execute, others have no access
-sudo chmod 750 "${user_home}"
-sudo chmod 750 "${domain_directory}"
-echo "Permissions secured for ${domain_directory}"
+# 755: User can read/write/execute, others (including Apache) can read/execute
+sudo chmod 755 "${user_home}"
+sudo chmod 755 "${domain_directory}"
+echo "Permissions secured (755) for ${domain_directory}"
 
 # Scaffold the runtime environment for the chosen site type
 setup_runtime_environment
@@ -794,6 +794,17 @@ MODSEC_EOF
         SecAuditEngine On
         SecAuditLog \${APACHE_LOG_DIR}/${domain_name}_modsec_audit.log
         Include "$MODSEC_WP_EXCLUSIONS"
+    </IfModule>
+MODSEC_BLOCK
+)
+        fi
+
+        if [ "${site_type,,}" = "php" ]; then
+            MODSEC_CONFIG=$(cat <<MODSEC_BLOCK
+    # Temporarily allow phpinfo() for setup phase
+    # (Removes SQL Leakage patterns from response body checks)
+    <IfModule security2_module>
+        SecRuleRemoveById 951230 951260 959100 980130
     </IfModule>
 MODSEC_BLOCK
 )
