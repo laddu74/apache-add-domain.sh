@@ -564,6 +564,7 @@ db_pass=${db_pass:-$(openssl rand -base64 16)}
 # Directories
 user_home="/home/${username}"
 domain_directory="${user_home}/public_html"
+domain_log_directory="${user_home}/logs"
 apache_conf_dir="/etc/apache2/sites-available/"
 apache_conf="${apache_conf_dir}${domain_name}.conf"
 
@@ -581,16 +582,22 @@ else
     echo "User ${username} created successfully with a secure password."
 fi
 
-# Create document root
+# Create document root and log directory
 sudo mkdir -p "${domain_directory}"
+sudo mkdir -p "${domain_log_directory}"
 
 # Secure permissions
 # Set owner to new user, group to www-data (Apache)
 sudo chown -R ${username}:www-data "${user_home}"
+
+# Add user to www-data group so they can read logs (Apache group has read access to /var/log/apache2 by default)
+sudo usermod -a -G www-data "${username}"
+
 # 755: User can read/write/execute, others (including Apache) can read/execute
 sudo chmod 755 "${user_home}"
 sudo chmod 755 "${domain_directory}"
-echo "Permissions secured (755) for ${domain_directory}"
+sudo chmod 770 "${domain_log_directory}" # Allow user and apache group to read/write in logs folder
+echo "Permissions secured for ${username} and logs directory."
 
 # Scaffold the runtime environment for the chosen site type
 setup_runtime_environment
@@ -799,17 +806,6 @@ MODSEC_BLOCK
 )
         fi
 
-        if [ "${site_type,,}" = "php" ]; then
-            MODSEC_CONFIG=$(cat <<MODSEC_BLOCK
-    # Temporarily allow phpinfo() for setup phase
-    # (Removes SQL Leakage patterns from response body checks)
-    <IfModule security2_module>
-        SecRuleRemoveById 951230 951260 959100 980130
-    </IfModule>
-MODSEC_BLOCK
-)
-        fi
-
         VHOST_CONFIG=$(cat <<EOF
 <VirtualHost *:80>
     ServerName ${domain_name}
@@ -848,6 +844,42 @@ esac
 echo "$VHOST_CONFIG" | sudo tee "$apache_conf" > /dev/null
 
 echo "VirtualHost configuration created."
+
+# Create symlinks for logs in the user's home directory
+echo "Setting up log symlinks in ${domain_log_directory}..."
+
+# Actual log paths in /var/log/apache2
+access_log="/var/log/apache2/${domain_name}_access.log"
+error_log="/var/log/apache2/${domain_name}-error.log"
+modsec_log="/var/log/apache2/${domain_name}_modsec_audit.log"
+
+# Pre-create log files with correct permissions if they don't exist
+# This ensures the symlinks point to something and permissions are set before Apache even starts
+for log in "$access_log" "$error_log"; do
+    if [ ! -f "$log" ]; then
+        sudo touch "$log"
+        sudo chown root:www-data "$log"
+        sudo chmod 664 "$log"
+    fi
+done
+
+# Create symlinks
+sudo ln -sf "$access_log" "${domain_log_directory}/access.log"
+sudo ln -sf "$error_log" "${domain_log_directory}/error.log"
+sudo chown -h ${username}:www-data "${domain_log_directory}/access.log" "${domain_log_directory}/error.log"
+
+# Optional: ModSecurity Audit Log
+if [ "${site_type,,}" = "wordpress" ]; then
+    if [ ! -f "$modsec_log" ]; then
+        sudo touch "$modsec_log"
+        sudo chown root:www-data "$modsec_log"
+        sudo chmod 664 "$modsec_log"
+    fi
+    sudo ln -sf "$modsec_log" "${domain_log_directory}/modsec_audit.log"
+    sudo chown -h ${username}:www-data "${domain_log_directory}/modsec_audit.log"
+fi
+
+echo "Log symlinks created in ${domain_log_directory}"
 
 echo "=========================================="
 echo "4. Enabling Site and Applying Changes"
