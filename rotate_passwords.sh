@@ -39,8 +39,16 @@ else
     MYSQL_CMD="sudo mysql"
 fi
 
-# Generate username from domain name (alphanumeric, max 16 chars for legacy DB compatibility)
-username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
+# Resolve username from setup log, falling back to domain name formula if missing
+log_file="/var/log/apache_${domain_name}_setup.log"
+username=""
+if [ -f "$log_file" ]; then
+    username=$(grep "System User:" "$log_file" | awk '{print $NF}')
+fi
+
+if [ -z "$username" ]; then
+    username=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
+fi
 
 # Database credentials
 db_name="${username}_db"

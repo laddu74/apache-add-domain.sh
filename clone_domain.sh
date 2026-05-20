@@ -96,6 +96,7 @@ NEW_DOCROOT="/home/${TARGET_USER}/public_html"
 # Run add_domain.sh with pre-defined credentials
 # Assumptions: add_domain.sh is in the same directory
 ./add_domain.sh "$TARGET_DOMAIN" \
+    --username="$TARGET_USER" \
     --db-name="$NEW_DB_NAME" \
     --db-user="$NEW_DB_USER" \
     --db-pass="$NEW_DB_PASS" \

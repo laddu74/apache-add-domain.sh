@@ -9,6 +9,7 @@ fi
 # Default values
 site_type="php"
 domain_name=""
+username=""
 docker_port="8080" # Default port if not specified
 git_url=""
 git_branch="main"
@@ -26,6 +27,8 @@ while [[ "$#" -gt 0 ]]; do
         --git-branch=*) git_branch="${1#*=}"; shift ;;
         --git-secret=*) git_secret="${1#*=}"; shift ;;
         --php=*) php_version="${1#*=}"; shift ;;
+        --username=*) username="${1#*=}"; shift ;;
+        -u|--username) username="$2"; shift 2 ;;
         --db-name=*) db_name="${1#*=}"; shift ;;
         --db-user=*) db_user="${1#*=}"; shift ;;
         --db-pass=*) db_pass="${1#*=}"; shift ;;
@@ -552,8 +555,35 @@ EOF
     fi
 }
 
-# Generate username from domain name if not already set (alphanumeric, max 16 chars for legacy DB compatibility)
-username=${username:-$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)}
+# Resolve username and handle conflicts
+if [ -n "$username" ]; then
+    # Explicit username was provided
+    if id "$username" &>/dev/null; then
+        echo "ERROR: System user '$username' already exists. Cannot proceed safely for domain $domain_name."
+        exit 1
+    fi
+else
+    # Auto-generate username from domain name (alphanumeric, max 16 chars)
+    base_user=$(echo "${domain_name}" | sed 's/[^a-zA-Z0-9]//g' | cut -c 1-16)
+    username="$base_user"
+    
+    # Check if username already exists on the system
+    if id "$username" &>/dev/null; then
+        while true; do
+            # Generate a random 4-letter lowercase alphabetical suffix
+            rand_suffix=$(LC_ALL=C tr -dc 'a-z' < /dev/urandom | head -c 4)
+            # If length of base_user is already 16, trim it to 12 to make room for suffix
+            trimmed_base=$(echo "$base_user" | cut -c 1-12)
+            temp_username="${trimmed_base}${rand_suffix}"
+            if ! id "$temp_username" &>/dev/null; then
+                username="$temp_username"
+                echo "WARNING: System user conflict detected for '$base_user'. Auto-generated unique username: $username"
+                break
+            fi
+        done
+    fi
+fi
+
 sys_pass=${sys_pass:-$(openssl rand -base64 16)}
 
 # Database credentials
@@ -573,14 +603,10 @@ echo "Site Type: ${site_type^^}"
 echo "=========================================="
 echo "1. Creating System User: ${username}"
 echo "=========================================="
-if id "$username" &>/dev/null; then
-    echo "User $username already exists."
-else
-    # Create user with a generated password
-    sudo useradd -m -d "${user_home}" -s /bin/bash "$username"
-    echo "${username}:${sys_pass}" | sudo chpasswd
-    echo "User ${username} created successfully with a secure password."
-fi
+# Create user with a generated password (guaranteed to be unique at this point)
+sudo useradd -m -d "${user_home}" -s /bin/bash "$username"
+echo "${username}:${sys_pass}" | sudo chpasswd
+echo "User ${username} created successfully with a secure password."
 
 # Create document root and log directory
 sudo mkdir -p "${domain_directory}"

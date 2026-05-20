@@ -9,6 +9,11 @@ These scripts are optimized for PHP, Perl, Python, and Ruby on Rails application
 ### 1. `add_domain.sh`
 This script fully automates the provisioning of a new domain.
 - **System Isolation:** Automatically creates a dedicated system user and a `public_html` directory with restricted permissions (`750` owner/www-data).
+- **Custom Usernames:** Allows explicitly setting a system username via `--username=...` or `-u ...`. If a custom username is passed and it already exists on the system, the script aborts immediately with an error to prevent accidental file sharing.
+- **Collision Protection:** If the system user already exists (or conflicts with protected system names like `ubuntu`, `mysql`, `www-data`, `root`):
+  - A random 4-letter alphabetical suffix is generated (e.g., `rdhf`).
+  - If the base user is already at the 16-character limit, it is automatically trimmed to 12 characters to ensure the final name stays strictly within the 16-character ceiling for legacy database compatibility.
+  - Recursively resolves until a completely unique username is secured.
 - **Secure Credentials:** Generates a highly secure 16-character random password for the system user (`openssl` generated).
 - **Multi-Platform Support:** Supports PHP (default), WordPress, Perl, Python (WSGI), Ruby on Rails (Passenger), and Docker (Reverse Proxy).
 - **PHP Versioning:** 
@@ -32,16 +37,16 @@ This script fully automates the provisioning of a new domain.
 
 **Usage:**
 ```bash
-sudo ./add_domain.sh example.com [--type=php|wordpress|...] [--php=8.2] [--git-url=URL] [--git-branch=main]
+sudo ./add_domain.sh example.com [--type=php|wordpress|...] [--username=customuser] [--php=8.2] [--git-url=URL] [--git-branch=main]
 ```
 
 ### 2. `delete_domain.sh`
-This script safely reverses the provisioning process, cleaning up the server.
-- **Safety First:** Prompts the user for a final `y/N` confirmation before executing any destructive operations.
-- **VirtualHost Cleanup:** Safely disables the Apache site, deletes the `.conf` file, and reloads the web server.
-- **Database Cleanup:** Drops the specific database and its associated database user.
-- **System Cleanup:** Kills any running processes under the system user, then removes the user and their home directory entirely (`/home/<username>`).
-- **Log Cleanup:** Flushes the root credential log file created during setup.
+This script reverses the provisioning process with flexible interactive options.
+- **Dynamic Username Resolution:** Automatically looks up the correct unique username in `/var/log/apache_${domain_name}_setup.log` first, avoiding guess-work and guaranteeing that changes affect the correct isolated system user.
+- **Interactive Prompts & Deletion Modes:** When invoked, the script prompts the user with flexible options:
+  - **1) Full Purge:** Disables the Apache VirtualHost, removes the configuration, drops the MySQL database/user, terminates running user processes, and completely deletes the system user and `/home/${username}` directory (website code files) with double confirmation.
+  - **2) Deactivate Only:** Only disables the VirtualHost and deletes the config, keeping the MySQL database, system user, credentials log, and all files under `/home/${username}` completely untouched.
+  - **3) Cancel:** Aborts the operation safely.
 
 **Usage:**
 ```bash
@@ -129,6 +134,13 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Domain Cloning**: Added `clone_domain.sh` for full site and database duplication.
 - **Recursive Find-Replace**: Cloning process automatically updates domain names and credentials in files and DB.
 - **Enhanced `add_domain.sh` CLI**: Added support for passing manual database and system credentials via arguments.
+
+### [2026-05-20]
+- **Interactive Deletion Modes**: Added support for selecting between a "Full Purge" and a safe "Deactivate Only" mode in `delete_domain.sh` to preserve code files and MySQL databases by default.
+- **Collision Protection**: Automatically appends a random 4-letter alphabetic suffix (with 12-char trimming to fit legacy 16-char boundaries) when system username collisions are detected in `add_domain.sh`.
+- **Custom Username Argument**: Added support for explicitly setting system usernames via `--username`/`-u` in `add_domain.sh`.
+- **Dynamic Username Resolution**: Both `delete_domain.sh` and `rotate_passwords.sh` now dynamically look up usernames from `/var/log/apache_${domain_name}_setup.log` for secure operations.
+- **Synchronized Cloning**: Enhanced `clone_domain.sh` to pass the target username parameter explicitly to `add_domain.sh` when duplicating domains.
 
 ## IDE / Development Rules
 
