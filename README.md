@@ -21,6 +21,10 @@ This script fully automates the provisioning of a new domain.
   - Automatically scaffolds starter `package.json`, HTTP `server.js`, and PM2 `ecosystem.config.js`.
   - Configures an Apache reverse proxy with bidirectional WebSocket (`Upgrade: websocket`) forwarding.
   - Configurable listening port via `--port=...` (defaults to `3000`).
+- **Port Collision Protection (Node.js & Docker):**
+  - Proactively checks existing Apache VirtualHosts in `/etc/apache2/sites-available` and active system network listeners (`ss`/`lsof`/`netstat`).
+  - If a port is specified explicitly (via `--port`) and already occupied, the script prevents misconfiguration and aborts with a clear error showing which domain configuration or process holds the port.
+  - If the default port (3000 for Node, 8080 for Docker) is already taken, it automatically scans and assigns the next available port (e.g. 3001, 3002) with a warning notification.
 - **PHP Versioning:** 
   - Allows selecting specific PHP versions via `--php=X.X` (e.g., 7.4, 8.1, 8.3).
   - Automatically discovers installed PHP versions on the system.
@@ -150,6 +154,7 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 ### [2026-11-15]
 - **Node.js Application Support**: Added `--type=node` (and `--type=nodejs`) with reverse proxy forwarding and WebSocket upgrade support (`ws://`).
 - **Configurable Application Port**: Supported `--port=...` / `-p ...` (default: 3000 for Node.js, 8080 for Docker).
+- **Port Collision Protection**: Automatically detects port conflicts against existing Apache VirtualHosts and active listening sockets; auto-increments to the next available port for defaults or alerts and aborts on conflicting explicit ports.
 - **Automated Node.js Scaffolding**: Proactively generates starter `package.json`, `server.js` HTTP server, and PM2 `ecosystem.config.js`.
 - **Runtime Dependency Checks**: Checks for `node`/`nodejs`, `npm`, and `pm2`, providing actionable installation guidance when missing.
 - **PM2 Process Cleanup**: Enhanced `delete_domain.sh` to cleanly stop and delete PM2 processes registered for the domain upon full purge.

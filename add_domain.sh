@@ -12,6 +12,7 @@ domain_name=""
 username=""
 docker_port="8080" # Default port if not specified
 node_port="3000"   # Default port for Node.js
+user_port=""       # Explicit port provided by user
 git_url=""
 git_branch="main"
 git_secret=$(openssl rand -hex 16)
@@ -22,8 +23,8 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --type=*) site_type="${1#*=}"; shift ;;
         -t|--type) site_type="$2"; shift 2 ;;
-        --port=*) docker_port="${1#*=}"; node_port="${1#*=}"; shift ;;
-        -p|--port) docker_port="$2"; node_port="$2"; shift 2 ;;
+        --port=*) docker_port="${1#*=}"; node_port="${1#*=}"; user_port="${1#*=}"; shift ;;
+        -p|--port) docker_port="$2"; node_port="$2"; user_port="$2"; shift 2 ;;
         --git-url=*) git_url="${1#*=}"; shift ;;
         --git-branch=*) git_branch="${1#*=}"; shift ;;
         --git-secret=*) git_secret="${1#*=}"; shift ;;
@@ -125,6 +126,100 @@ check_required_modules() {
 
 # Run module check
 check_required_modules
+
+# Function to check if a port is in use by an existing Apache VirtualHost or active socket
+check_port_usage() {
+    local test_port="$1"
+    local current_conf="${domain_name}.conf"
+
+    # 1. Check Apache virtual host configurations (sites-available)
+    if [ -d "/etc/apache2/sites-available" ]; then
+        for conf in /etc/apache2/sites-available/*.conf; do
+            [ -f "$conf" ] || continue
+            [ "$(basename "$conf")" = "$current_conf" ] && continue
+            if grep -E -q "(ProxyPass|ProxyPassReverse|RewriteRule).*[:/](127\.0\.0\.1|localhost):${test_port}(/|[[:space:]]|$)" "$conf" 2>/dev/null; then
+                echo "conflict:apache:$(basename "$conf")"
+                return 1
+            fi
+        done
+    fi
+
+    # 2. Check active network listeners
+    if command -v ss &>/dev/null; then
+        if ss -tlnH "sport = :${test_port}" 2>/dev/null | grep -q ":${test_port}"; then
+            echo "conflict:active_process"
+            return 1
+        fi
+    elif command -v lsof &>/dev/null; then
+        if lsof -iTCP:"${test_port}" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then
+            echo "conflict:active_process"
+            return 1
+        fi
+    elif (exec 3<>/dev/tcp/127.0.0.1/${test_port}) 2>/dev/null; then
+        exec 3<&-
+        exec 3>&-
+        echo "conflict:active_process"
+        return 1
+    fi
+
+    return 0
+}
+
+# Function to detect and resolve port conflicts for reverse-proxy sites (node, docker)
+resolve_port_collision() {
+    local target_type=$(echo "$site_type" | tr '[:upper:]' '[:lower:]')
+    if [[ ! "$target_type" =~ ^(node|nodejs|docker)$ ]]; then
+        return 0
+    fi
+
+    local current_port=""
+    if [[ "$target_type" =~ ^(node|nodejs)$ ]]; then
+        current_port="$node_port"
+    else
+        current_port="$docker_port"
+    fi
+
+    local conflict_info
+    conflict_info=$(check_port_usage "$current_port")
+
+    if [ $? -ne 0 ]; then
+        local reason="already in use"
+        if echo "$conflict_info" | grep -q "^conflict:apache:"; then
+            local conf_file=$(echo "$conflict_info" | cut -d: -f3)
+            reason="already configured in Apache by ${conf_file}"
+        elif echo "$conflict_info" | grep -q "^conflict:active_process"; then
+            reason="already in use by an active system service/process"
+        fi
+
+        if [ -n "$user_port" ]; then
+            echo "=========================================="
+            echo " ERROR: Port Conflict Detected"
+            echo "=========================================="
+            echo "The specified port ${current_port} is ${reason}."
+            echo "Please choose a different port using --port=<PORT>."
+            echo "=========================================="
+            exit 1
+        else
+            local next_port="$current_port"
+            while true; do
+                next_port=$((next_port + 1))
+                if check_port_usage "$next_port" >/dev/null; then
+                    break
+                fi
+            done
+            echo "WARNING: Default port ${current_port} is ${reason}."
+            echo "Auto-assigned next available port: ${next_port}"
+            if [[ "$target_type" =~ ^(node|nodejs)$ ]]; then
+                node_port="$next_port"
+            else
+                docker_port="$next_port"
+            fi
+        fi
+    fi
+}
+
+# Resolve port collisions for reverse-proxy sites
+resolve_port_collision
 
 # Function to add PHP repository (PPA/Debian repo)
 setup_php_repository() {
