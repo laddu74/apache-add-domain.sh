@@ -2,7 +2,7 @@
 
 A set of automated bash utility scripts to quickly set up, secure, and remove Apache virtual hosts, along with dedicated system users and MySQL databases on Ubuntu/Debian servers. 
 
-These scripts are optimized for PHP, Perl, Python, and Ruby on Rails applications, enforcing security best practices out of the box.
+These scripts are optimized for PHP, Perl, Python, Ruby on Rails, Docker, and Node.js applications, enforcing security best practices out of the box.
 
 ## Features
 
@@ -15,13 +15,18 @@ This script fully automates the provisioning of a new domain.
   - If the base user is already at the 16-character limit, it is automatically trimmed to 12 characters to ensure the final name stays strictly within the 16-character ceiling for legacy database compatibility.
   - Recursively resolves until a completely unique username is secured.
 - **Secure Credentials:** Generates a highly secure 16-character random password for the system user (`openssl` generated).
-- **Multi-Platform Support:** Supports PHP (default), WordPress, Perl, Python (WSGI), Ruby on Rails (Passenger), and Docker (Reverse Proxy).
+- **Multi-Platform Support:** Supports PHP (default), WordPress, Perl, Python (WSGI), Ruby on Rails (Passenger), Docker (Reverse Proxy), and Node.js (Reverse Proxy with WebSocket support).
+- **Node.js Integration:**
+  - Automated environment checks for `node`, `npm`, and `pm2`.
+  - Automatically scaffolds starter `package.json`, HTTP `server.js`, and PM2 `ecosystem.config.js`.
+  - Configures an Apache reverse proxy with bidirectional WebSocket (`Upgrade: websocket`) forwarding.
+  - Configurable listening port via `--port=...` (defaults to `3000`).
 - **PHP Versioning:** 
   - Allows selecting specific PHP versions via `--php=X.X` (e.g., 7.4, 8.1, 8.3).
   - Automatically discovers installed PHP versions on the system.
   - Interactive prompt if no version is specified.
   - Native PHP-FPM support for high performance and side-by-side versions.
-- **Module Verification:** Automatically checks for required Apache modules (e.g., `mod_wsgi`, `mod_passenger`, `mod_proxy_fcgi`) and alerts the user if any are missing.
+- **Module Verification:** Automatically checks for required Apache modules (e.g., `mod_wsgi`, `mod_passenger`, `mod_proxy_fcgi`, `mod_proxy_http`, `mod_proxy_wstunnel`) and alerts the user if any are missing.
 - **Database Provisioning:** Creates a dedicated MySQL database and a specific database user, generating another secure random password, and strictly binding privileges.
 - **Apache VirtualHost:** 
   - Generates an Apache `.conf` file tailored to the application type.
@@ -37,7 +42,7 @@ This script fully automates the provisioning of a new domain.
 
 **Usage:**
 ```bash
-sudo ./add_domain.sh example.com [--type=php|wordpress|...] [--username=customuser] [--php=8.2] [--git-url=URL] [--git-branch=main]
+sudo ./add_domain.sh example.com [--type=php|wordpress|node|docker|...] [--port=3000] [--username=customuser] [--php=8.2] [--git-url=URL] [--git-branch=main]
 ```
 
 ### 2. `delete_domain.sh`
@@ -141,6 +146,13 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 - **Custom Username Argument**: Added support for explicitly setting system usernames via `--username`/`-u` in `add_domain.sh`.
 - **Dynamic Username Resolution**: Both `delete_domain.sh` and `rotate_passwords.sh` now dynamically look up usernames from `/var/log/apache_${domain_name}_setup.log` for secure operations.
 - **Synchronized Cloning**: Enhanced `clone_domain.sh` to pass the target username parameter explicitly to `add_domain.sh` when duplicating domains.
+
+### [2026-11-15]
+- **Node.js Application Support**: Added `--type=node` (and `--type=nodejs`) with reverse proxy forwarding and WebSocket upgrade support (`ws://`).
+- **Configurable Application Port**: Supported `--port=...` / `-p ...` (default: 3000 for Node.js, 8080 for Docker).
+- **Automated Node.js Scaffolding**: Proactively generates starter `package.json`, `server.js` HTTP server, and PM2 `ecosystem.config.js`.
+- **Runtime Dependency Checks**: Checks for `node`/`nodejs`, `npm`, and `pm2`, providing actionable installation guidance when missing.
+- **PM2 Process Cleanup**: Enhanced `delete_domain.sh` to cleanly stop and delete PM2 processes registered for the domain upon full purge.
 
 ## IDE / Development Rules
 

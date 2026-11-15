@@ -11,6 +11,7 @@ site_type="php"
 domain_name=""
 username=""
 docker_port="8080" # Default port if not specified
+node_port="3000"   # Default port for Node.js
 git_url=""
 git_branch="main"
 git_secret=$(openssl rand -hex 16)
@@ -21,8 +22,8 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --type=*) site_type="${1#*=}"; shift ;;
         -t|--type) site_type="$2"; shift 2 ;;
-        --port=*) docker_port="${1#*=}"; shift ;;
-        -p|--port) docker_port="$2"; shift 2 ;;
+        --port=*) docker_port="${1#*=}"; node_port="${1#*=}"; shift ;;
+        -p|--port) docker_port="$2"; node_port="$2"; shift 2 ;;
         --git-url=*) git_url="${1#*=}"; shift ;;
         --git-branch=*) git_branch="${1#*=}"; shift ;;
         --git-secret=*) git_secret="${1#*=}"; shift ;;
@@ -39,7 +40,7 @@ done
 
 # Check if domain name argument is provided
 if [ -z "$domain_name" ]; then
-    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker] [--port=8080] [--php=8.2]"
+    echo "Usage: sudo $0 <domain_name> [--type=php|wordpress|perl|python|ror|docker|node] [--port=3000|8080] [--php=8.2]"
     exit 1
 fi
 
@@ -74,6 +75,7 @@ check_required_modules() {
         python) modules=("wsgi" "rewrite" "headers") ;;
         ror) modules=("passenger" "rewrite" "headers") ;;
         docker) modules=("proxy" "proxy_http" "rewrite" "headers") ;;
+        node|nodejs) modules=("proxy" "proxy_http" "rewrite" "headers") ;;
         wordpress) modules=("rewrite" "headers" "security2" "proxy_fcgi" "setenvif") ;;
         php|*) modules=("rewrite" "headers" "proxy_fcgi" "setenvif") ;;
     esac
@@ -91,6 +93,16 @@ check_required_modules() {
         fi
     done
 
+    # Enable optional WebSocket proxy module for Node.js if available
+    if [[ "${site_type,,}" =~ ^(node|nodejs)$ ]]; then
+        if [ -f "/etc/apache2/mods-available/proxy_wstunnel.load" ]; then
+            if ! apache2ctl -M 2>/dev/null | grep -q "proxy_wstunnel_module"; then
+                echo "Enabling optional module for WebSockets: proxy_wstunnel"
+                sudo a2enmod proxy_wstunnel > /dev/null 2>&1
+            fi
+        fi
+    fi
+
     if [ ${#missing_modules[@]} -ne 0 ]; then
         echo "=========================================="
         echo " ERROR: Missing Required Apache Modules"
@@ -105,7 +117,7 @@ check_required_modules() {
         echo " - WSGI (Python): libapache2-mod-wsgi-py3"
         echo " - Passenger (RoR): libapache2-mod-passenger"
         echo " - Perl: libapache2-mod-perl2 (or just use cgid which is usually built-in)"
-        echo " - Docker (Proxy): Usually pre-installed, just needs a2enmod proxy proxy_http"
+        echo " - Docker / Node.js (Proxy): Usually pre-installed, just needs a2enmod proxy proxy_http"
         echo "=========================================="
         exit 1
     fi
@@ -327,6 +339,127 @@ ENDSCRIPT
                 sudo mv /tmp/_docker_compose_yml.$$ "${domain_directory}/docker-compose.yml"
                 sudo chown ${username}:www-data "${domain_directory}/docker-compose.yml"
                 echo "OK Starter docker-compose.yml created in ${domain_directory}"
+            fi
+            ;;
+
+        node|nodejs)
+            echo "OK Node.js reverse proxy selected. Traffic will be forwarded to localhost:${node_port}"
+
+            # Check Node.js interpreter
+            if ! command -v node &> /dev/null && ! command -v nodejs &> /dev/null; then
+                echo "WARNING: Node.js is not installed."
+                echo "  Install with: sudo apt install nodejs npm (or via NodeSource)"
+            else
+                NODE_CMD="node"
+                if ! command -v node &> /dev/null; then
+                    NODE_CMD="nodejs"
+                fi
+                NODE_VER=$($NODE_CMD --version)
+                echo "OK Node.js found: ${NODE_VER} (${NODE_CMD})"
+            fi
+
+            # Check npm
+            if ! command -v npm &> /dev/null; then
+                echo "WARNING: npm is not installed."
+                echo "  Install with: sudo apt install npm"
+            else
+                NPM_VER=$(npm --version)
+                echo "OK npm found: v${NPM_VER}"
+            fi
+
+            # Check PM2 (recommended process manager)
+            if ! command -v pm2 &> /dev/null; then
+                echo "INFO: PM2 process manager is not installed (recommended for production)."
+                echo "  Install with: sudo npm install -g pm2"
+            else
+                PM2_VER=$(pm2 --version 2>/dev/null)
+                echo "OK PM2 found: v${PM2_VER}"
+            fi
+
+            # Create starter package.json
+            if [ ! -f "${domain_directory}/package.json" ]; then
+                cat > /tmp/_package_json.$$ <<ENDSCRIPT
+{
+  "name": "${username}-app",
+  "version": "1.0.0",
+  "description": "Node.js application for ${domain_name}",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}
+ENDSCRIPT
+                sudo mv /tmp/_package_json.$$ "${domain_directory}/package.json"
+                sudo chown ${username}:www-data "${domain_directory}/package.json"
+                sudo chmod 644 "${domain_directory}/package.json"
+                echo "OK Starter package.json created in ${domain_directory}"
+            fi
+
+            # Create starter server.js
+            if [ ! -f "${domain_directory}/server.js" ]; then
+                cat > /tmp/_server_js.$$ <<ENDSCRIPT
+const http = require('http');
+
+const PORT = process.env.PORT || ${node_port};
+
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(\`<!DOCTYPE html>
+<html>
+<head>
+    <title>Node.js - ${domain_name}</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; text-align: center; padding-top: 50px; background: #f4f6f8; color: #333; }
+        .card { background: white; max-width: 600px; margin: 0 auto; padding: 40px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { color: #2e7d32; }
+        code { background: #eee; padding: 2px 6px; border-radius: 4px; font-size: 1.1em; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Node.js Application is Live!</h1>
+        <p>Serving domain: <strong>${domain_name}</strong></p>
+        <p>Listening on port: <code>\${PORT}</code></p>
+        <p>Reverse proxied through Apache.</p>
+    </div>
+</body>
+</html>\`);
+});
+
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(\`Server running at http://127.0.0.1:\${PORT}/\`);
+});
+ENDSCRIPT
+                sudo mv /tmp/_server_js.$$ "${domain_directory}/server.js"
+                sudo chown ${username}:www-data "${domain_directory}/server.js"
+                sudo chmod 644 "${domain_directory}/server.js"
+                echo "OK Starter server.js created in ${domain_directory}"
+            fi
+
+            # Create ecosystem.config.js for PM2
+            if [ ! -f "${domain_directory}/ecosystem.config.js" ]; then
+                cat > /tmp/_ecosystem_config_js.$$ <<ENDSCRIPT
+module.exports = {
+  apps: [{
+    name: '${domain_name}',
+    script: 'server.js',
+    cwd: '${domain_directory}',
+    instances: 1,
+    autorestart: true,
+    watch: false,
+    max_memory_restart: '1G',
+    env: {
+      NODE_ENV: 'production',
+      PORT: ${node_port}
+    }
+  }]
+};
+ENDSCRIPT
+                sudo mv /tmp/_ecosystem_config_js.$$ "${domain_directory}/ecosystem.config.js"
+                sudo chown ${username}:www-data "${domain_directory}/ecosystem.config.js"
+                sudo chmod 644 "${domain_directory}/ecosystem.config.js"
+                echo "OK Starter ecosystem.config.js created in ${domain_directory}"
             fi
             ;;
 
@@ -789,6 +922,46 @@ EOF
 EOF
 )
         ;;
+    node|nodejs)
+        VHOST_CONFIG=$(cat <<EOF
+<VirtualHost *:80>
+    ServerName ${domain_name}
+    ServerAlias www.${domain_name}
+    DocumentRoot ${domain_directory}
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+
+    # WebSocket proxy support
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/?(.*) ws://127.0.0.1:${node_port}/\$1 [P,L]
+
+    ProxyPass / http://127.0.0.1:${node_port}/
+    ProxyPassReverse / http://127.0.0.1:${node_port}/
+
+    <Directory ${domain_directory}>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    <DirectoryMatch "/\.(?!well-known)">
+        Require all denied
+    </DirectoryMatch>
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog \${APACHE_LOG_DIR}/${domain_name}-error.log
+    CustomLog \${APACHE_LOG_DIR}/${domain_name}_access.log combined
+</VirtualHost>
+EOF
+)
+        ;;
     php|wordpress|*)
         MODSEC_CONFIG=""
         if [ "${site_type,,}" = "wordpress" ]; then
@@ -930,6 +1103,11 @@ echo " SETUP COMPLETE"
 echo "=========================================="
 echo "Domain:        ${domain_name}"
 echo "Site Type:     ${site_type^^}"
+if [ "${site_type,,}" = "docker" ]; then
+    echo "Port:          ${docker_port}"
+elif [ "${site_type,,}" = "node" ] || [ "${site_type,,}" = "nodejs" ]; then
+    echo "Port:          ${node_port}"
+fi
 echo "System User:   ${username}"
 echo "System Pass:   ${sys_pass}"
 echo "Document Root: ${domain_directory}"
@@ -946,6 +1124,12 @@ if [ -n "$git_url" ]; then
     echo "Webhook Sec:   ${git_secret}"
     echo "Webhook URL:   http://${domain_name}/deploy-webhook.php"
 fi
+if [ "${site_type,,}" = "node" ] || [ "${site_type,,}" = "nodejs" ]; then
+    echo ""
+    echo "Node.js Quickstart:"
+    echo "  To start your app with PM2: sudo -u ${username} pm2 start ${domain_directory}/ecosystem.config.js"
+    echo "  To view logs with PM2:       sudo -u ${username} pm2 logs ${domain_name}"
+fi
 echo "=========================================="
 
 # Log credentials to a secure file
@@ -956,6 +1140,7 @@ cat <<EOF | sudo tee -a "$log_file" > /dev/null
 ==========================================
 Date:          $(date)
 Domain:        ${domain_name}
+Site Type:     ${site_type^^}
 System User:   ${username}
 System Pass:   ${sys_pass}
 Document Root: ${domain_directory}

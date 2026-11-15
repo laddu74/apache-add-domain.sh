@@ -120,6 +120,10 @@ echo "3. Removing/Preserving System User & Home Directory"
 echo "=========================================="
 if [ "$mode" = "full" ]; then
     if id "$username" &>/dev/null; then
+        # Stop and delete PM2 process if PM2 is installed
+        if command -v pm2 &>/dev/null; then
+            sudo -u "$username" pm2 delete "$domain_name" >/dev/null 2>&1
+        fi
         # Kill any processes running as the user before deleting
         sudo pkill -u "$username"
         # Remove user and home directory (-r flag)
