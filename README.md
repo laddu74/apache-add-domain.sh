@@ -19,6 +19,7 @@ This script fully automates the provisioning of a new domain.
 - **Node.js Integration:**
   - Automated environment checks for `node`, `npm`, and `pm2`.
   - Automatically scaffolds starter `package.json`, HTTP `server.js`, and PM2 `ecosystem.config.js`.
+  - Automatically launches the application in the background upon provisioning (via PM2 or auto-generated systemd service) for immediate zero-downtime availability.
   - Configures an Apache reverse proxy with bidirectional WebSocket (`Upgrade: websocket`) forwarding.
   - Configurable listening port via `--port=...` (defaults to `3000`).
 - **Port Collision Protection (Node.js & Docker):**
@@ -122,11 +123,12 @@ Every successful domain creation is recorded in a centralized audit log: `/var/l
 
 ### [2026-11-15] - Node.js Support & Port Collision Protection
 - **Node.js Application Support**: Added `--type=node` (and `--type=nodejs`) with reverse proxy forwarding and WebSocket upgrade support (`ws://`).
+- **Zero-Downtime Automated Launch**: Node.js applications are now automatically started upon domain provisioning (using PM2 if present, or an auto-generated systemd unit service), ensuring immediate live 200 OK responses without manual intervention.
 - **Configurable Application Port**: Supported `--port=...` / `-p ...` (default: 3000 for Node.js, 8080 for Docker).
 - **Port Collision Protection**: Automatically detects port conflicts against existing Apache VirtualHosts and active listening sockets; auto-increments to the next available port for defaults or alerts and aborts on conflicting explicit ports.
 - **Automated Node.js Scaffolding**: Proactively generates starter `package.json`, `server.js` HTTP server, and PM2 `ecosystem.config.js`.
 - **Runtime Dependency Checks**: Checks for `node`/`nodejs`, `npm`, and `pm2`, providing actionable installation guidance when missing.
-- **PM2 Process Cleanup**: Enhanced `delete_domain.sh` to cleanly stop and delete PM2 processes registered for the domain upon full purge.
+- **Service & Process Cleanup**: Enhanced `delete_domain.sh` to cleanly stop and delete both systemd services and PM2 processes registered for the domain upon full purge.
 
 ### [2026-05-20] - Interactive Deletion & Collision Protection
 - **Interactive Deletion Modes**: Added support for selecting between a "Full Purge" and a safe "Deactivate Only" mode in `delete_domain.sh` to preserve code files and MySQL databases by default.

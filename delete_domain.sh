@@ -120,9 +120,18 @@ echo "3. Removing/Preserving System User & Home Directory"
 echo "=========================================="
 if [ "$mode" = "full" ]; then
     if id "$username" &>/dev/null; then
+        # Stop and remove systemd service if present
+        if [ -f "/etc/systemd/system/node-${domain_name}.service" ]; then
+            sudo systemctl stop "node-${domain_name}" >/dev/null 2>&1
+            sudo systemctl disable "node-${domain_name}" >/dev/null 2>&1
+            sudo rm -f "/etc/systemd/system/node-${domain_name}.service"
+            sudo systemctl daemon-reload >/dev/null 2>&1
+            echo "Systemd service node-${domain_name} removed."
+        fi
         # Stop and delete PM2 process if PM2 is installed
         if command -v pm2 &>/dev/null; then
             sudo -u "$username" pm2 delete "$domain_name" >/dev/null 2>&1
+            sudo -u "$username" pm2 save >/dev/null 2>&1
         fi
         # Kill any processes running as the user before deleting
         sudo pkill -u "$username"

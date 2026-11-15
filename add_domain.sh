@@ -556,6 +556,42 @@ ENDSCRIPT
                 sudo chmod 644 "${domain_directory}/ecosystem.config.js"
                 echo "OK Starter ecosystem.config.js created in ${domain_directory}"
             fi
+
+            # Automatically launch the Node.js application in background
+            echo "Starting Node.js application in background..."
+            if command -v pm2 &> /dev/null; then
+                sudo -u "${username}" pm2 start "${domain_directory}/ecosystem.config.js" > /dev/null 2>&1
+                sudo -u "${username}" pm2 save > /dev/null 2>&1
+                echo "OK Application automatically started and saved with PM2."
+            else
+                # Fallback to systemd unit service to guarantee zero-downtime automated startup
+                service_file="/etc/systemd/system/node-${domain_name}.service"
+                node_bin=$(command -v node 2>/dev/null || command -v nodejs 2>/dev/null)
+                if [ -n "$node_bin" ]; then
+                    cat <<SVC_EOF | sudo tee "$service_file" > /dev/null
+[Unit]
+Description=Node.js Application for ${domain_name}
+After=network.target
+
+[Service]
+Type=simple
+User=${username}
+WorkingDirectory=${domain_directory}
+ExecStart=${node_bin} ${domain_directory}/server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production PORT=${node_port}
+
+[Install]
+WantedBy=multi-user.target
+SVC_EOF
+                    sudo systemctl daemon-reload
+                    sudo systemctl enable --now "node-${domain_name}" > /dev/null 2>&1
+                    echo "OK Application automatically started via systemd service: node-${domain_name}"
+                else
+                    echo "WARNING: Node executable not found. Could not auto-start application."
+                fi
+            fi
             ;;
 
         php|wordpress|*)
